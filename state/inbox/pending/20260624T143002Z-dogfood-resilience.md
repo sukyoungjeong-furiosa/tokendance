@@ -1,0 +1,1 @@
+supervisor 자기 회복(크래시 후 재기동)과 관측성(틱 로그/메트릭)을 추가하라. repo: /root/src/tokendance

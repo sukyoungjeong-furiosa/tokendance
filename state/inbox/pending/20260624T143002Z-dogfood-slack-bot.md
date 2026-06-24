@@ -1,0 +1,1 @@
+진짜 tokendance Slack 봇(봇 토큰) 정체성을 붙여 self-DM 대신 봇과의 DM UX로 전환하라. repo: /root/src/tokendance

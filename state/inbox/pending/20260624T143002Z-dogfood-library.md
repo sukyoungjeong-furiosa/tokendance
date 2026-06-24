@@ -1,0 +1,1 @@
+지식 라이브러리 자동화: 워커 log.md 의 '## 지식:' 블록을 library/playbooks 또는 repos/<repo>.md 로 승격하고 index.md 링크를 갱신하는 흐름을 정교화하라. repo: /root/src/tokendance

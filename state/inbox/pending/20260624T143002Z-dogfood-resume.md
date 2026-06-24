@@ -1,0 +1,1 @@
+워커 반려 재투입을 --resume(worker_session_id) 기반으로 신뢰성 있게 만들라. repo: /root/src/tokendance
