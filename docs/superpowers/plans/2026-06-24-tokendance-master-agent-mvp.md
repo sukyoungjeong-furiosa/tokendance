@@ -17,6 +17,8 @@
 - **상태 7개:** `queued | running | needs_human | blocked | review | done | failed`. `failed`는 `failure_reason` 필수.
 - **파일 단일 소유자:** progress/log/steer.cursor=워커, review/reports=마스터, steer.md=append-only, status.json=status.py 경유.
 - **claude 바이너리 경로는 환경변수 `TOKENDANCE_CLAUDE`로 주입.** 하드코딩 금지(버전 디렉토리가 바뀜).
+- **모든 claude 기동은 `IS_SANDBOX=1` + `--dangerously-skip-permissions`.** root 실행이라 IS_SANDBOX 없이는 거부됨(Task 1 스파이크 확인).
+- **워커 생사 판정은 heartbeat 신선도로 한다 (pid 생존 아님).** setsid 후 claude가 재fork/재부모화해 `$!`가 실제 pid와 불일치(스파이크 확인). staleness 임계 = 1200초(20분). worker_pid 는 디버깅용 best-effort 저장.
 - **타겟 레포 변경은 브랜치/PR로만.** main 직접 push 금지.
 - **자주 커밋.** 각 태스크 끝에 커밋.
 - 레포 루트의 모든 함수는 `root` 인자를 받아 테스트 가능해야 한다(CLI는 `dirname(dirname(__file__))`로 기본값 계산).
@@ -801,17 +803,20 @@ if ! "$ROOT/scripts/prepare-worktree.sh" "$TASK_ID" >>"$LOG" 2>&1; then
   exit 1
 fi
 
-# 2) 워커 기동 (detached: setsid + stdin 차단 + disown)
+# 2) 워커 기동 (detached: setsid + IS_SANDBOX=1 + stdin 차단 + disown)
+#    IS_SANDBOX=1 은 root에서 --dangerously-skip-permissions 를 허용하기 위해 필수(스파이크 확인).
 PROMPT="너는 tokendance 워커다. task id=${TASK_ID}. ${ROOT}/prompts/worker.md 를 읽고 그대로 따르라. 일감 명세: ${TASK_DIR}/task.md"
-setsid "$TOKENDANCE_CLAUDE" -p "$PROMPT" \
+setsid env IS_SANDBOX=1 "$TOKENDANCE_CLAUDE" -p "$PROMPT" \
   --append-system-prompt "$(cat "$ROOT/prompts/worker.md")" \
   --dangerously-skip-permissions \
   >>"$LOG" 2>&1 < /dev/null &
 PID=$!
 disown 2>/dev/null || true
 
-# 3) 상태를 running + pid 로 기록
+# 3) 상태를 running 으로 기록 + 즉시 heartbeat (갓 띄운 워커가 stale 로 오판되지 않게).
+#    PID 는 best-effort(디버깅용) — 생사 판정은 supervisor 가 heartbeat 로 함.
 python3 "$ROOT/scripts/status.py" set "$TASK_ID" --state running --pid "$PID"
+python3 "$ROOT/scripts/status.py" heartbeat "$TASK_ID"
 echo "$PID"
 ```
 
@@ -838,9 +843,9 @@ git commit -m "feat: launch-worker.sh — detached worker process launch"
 **Interfaces:**
 - Consumes: `status`, `tasks` 모듈, 환경변수 `TOKENDANCE_CLAUDE`
 - Produces:
-  - `is_alive(pid) -> bool`
-  - `health_check(root) -> list[str]` — running인데 pid 죽은 task를 `needs_human`으로 전환, 그 id 목록 반환
-  - `run_master(root, claude_bin) -> subprocess.CompletedProcess`
+  - `STALE_SECONDS = 1200` (모듈 상수)
+  - `health_check(root, now=None, stale_seconds=STALE_SECONDS) -> list[str]` — running인데 heartbeat가 없거나 stale_seconds 초과로 오래된 task를 `needs_human`으로 전환, 그 id 목록 반환. `now`는 테스트 주입용(`datetime`).
+  - `run_master(root, claude_bin) -> subprocess.CompletedProcess` — `IS_SANDBOX=1` 환경으로 마스터 기동
   - `tick(root, claude_bin)` — health_check 후 run_master
   - CLI: `supervisor.py [--once] [--interval N]`
 
@@ -849,10 +854,15 @@ git commit -m "feat: launch-worker.sh — detached worker process launch"
 `tests/test_supervisor.py`:
 ```python
 import os, sys, tempfile, unittest
+from datetime import datetime, timezone, timedelta
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 import supervisor as SV
 import tasks as TK
 import status as S
+
+
+def _iso(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class SupervisorTest(unittest.TestCase):
@@ -863,23 +873,32 @@ class SupervisorTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_is_alive(self):
-        self.assertTrue(SV.is_alive(os.getpid()))
-        self.assertFalse(SV.is_alive(2147480000))
-        self.assertFalse(SV.is_alive(None))
-
-    def test_health_check_marks_dead_worker(self):
+    def test_health_check_marks_stale_worker(self):
         TK.create_task(self.root, "t1")
-        S.update(self.root, "t1", {"state": "running", "worker_pid": 2147480000})
+        old = datetime.now(timezone.utc) - timedelta(seconds=3000)
+        S.update(self.root, "t1", {"state": "running", "heartbeat": _iso(old)})
         dead = SV.health_check(self.root)
         self.assertEqual(dead, ["t1"])
         self.assertEqual(S.read(self.root, "t1")["state"], "needs_human")
 
-    def test_health_check_leaves_live_worker(self):
+    def test_health_check_leaves_fresh_worker(self):
         TK.create_task(self.root, "t1")
-        S.update(self.root, "t1", {"state": "running", "worker_pid": os.getpid()})
+        fresh = datetime.now(timezone.utc)
+        S.update(self.root, "t1", {"state": "running", "heartbeat": _iso(fresh)})
         self.assertEqual(SV.health_check(self.root), [])
         self.assertEqual(S.read(self.root, "t1")["state"], "running")
+
+    def test_health_check_marks_running_without_heartbeat(self):
+        TK.create_task(self.root, "t1")
+        S.update(self.root, "t1", {"state": "running"})  # heartbeat 없음 = 이상
+        dead = SV.health_check(self.root)
+        self.assertEqual(dead, ["t1"])
+        self.assertEqual(S.read(self.root, "t1")["state"], "needs_human")
+
+    def test_health_check_ignores_non_running(self):
+        TK.create_task(self.root, "t1")  # queued, heartbeat 없음
+        self.assertEqual(SV.health_check(self.root), [])
+        self.assertEqual(S.read(self.root, "t1")["state"], "queued")
 
 
 if __name__ == "__main__":
@@ -902,28 +921,33 @@ import os
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import status as S
 import tasks as TK
 
-INTERVAL = 1800  # 30분
+INTERVAL = 1800       # 30분 (틱 주기)
+STALE_SECONDS = 1200  # 20분 — heartbeat 이보다 오래되면 죽은 워커로 간주
 
 
-def is_alive(pid):
-    if not pid:
-        return False
-    try:
-        os.kill(int(pid), 0)
-    except (OSError, ValueError):
-        return False
-    return True
+def _parse_iso(s):
+    # "2026-06-24T10:05:00Z" → aware datetime
+    return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
 
 
-def health_check(root):
+def health_check(root, now=None, stale_seconds=STALE_SECONDS):
+    """running 인데 heartbeat 가 없거나 stale 한 워커를 needs_human 으로 전환.
+
+    생사 판정을 pid 가 아니라 heartbeat 신선도로 하는 이유: setsid 후 claude 가
+    재fork/재부모화하여 launch 시점의 pid 가 실제 워커 pid 와 불일치(Task 1 스파이크).
+    """
+    now = now or datetime.now(timezone.utc)
     dead = []
     for d in TK.list_tasks(root, state="running"):
-        if not is_alive(d.get("worker_pid")):
+        hb = d.get("heartbeat")
+        stale = (hb is None) or ((now - _parse_iso(hb)).total_seconds() > stale_seconds)
+        if stale:
             S.update(root, d["id"], {"state": "needs_human"})
             dead.append(d["id"])
     return dead
@@ -935,11 +959,12 @@ def run_master(root, claude_bin):
               f"정확히 한 번의 관리 사이클을 수행한 뒤 종료하라.")
     with open(master_md) as f:
         sysprompt = f.read()
+    env = {**os.environ, "IS_SANDBOX": "1"}  # root 에서 자율 권한 허용에 필수
     return subprocess.run(
         [claude_bin, "-p", prompt,
          "--append-system-prompt", sysprompt,
          "--dangerously-skip-permissions"],
-        cwd=root)
+        cwd=root, env=env)
 
 
 def tick(root, claude_bin):
@@ -1114,6 +1139,8 @@ git commit -m "feat: master.md operating procedure"
 2. `state/tasks/<task-id>/steer.md` 에서 `steer.cursor`(바이트 offset) 이후의 새 지시만 읽어 반영하고,
    반영 사실을 `log.md` 에 append 한 뒤 `steer.cursor` 를 파일 끝 offset 으로 갱신한다.
 3. `python3 scripts/status.py heartbeat <task-id>` 로 heartbeat 갱신.
+   **heartbeat 가 20분 이상 멈추면 supervisor 가 너를 죽은 것으로 보고 needs_human 으로 돌린다.**
+   따라서 긴 작업(빌드/테스트 등) 전후로 자주(최소 10분 간격) heartbeat 를 찍어라.
 4. 사람 판단이 꼭 필요하면 progress.md 에 질문을 명확히 적고
    `python3 scripts/status.py set <task-id> --state needs_human` 후 멈춘다.
 
@@ -1245,38 +1272,31 @@ git commit -m "feat: library skeleton, gitignore; e2e smoke verified"
 
 ---
 
-## Task 11: Slack 연동 (Task 1 스파이크 결과에 따라 분기)
+## Task 11: Slack 연동 (경로 A — MCP, 스파이크에서 확정)
+
+Task 1 스파이크에서 headless 실행에 `mcp__claude_ai_Slack__*` 툴이 노출됨을 확인했으므로 경로 A로 간다.
 
 **Files:**
-- Modify: `prompts/master.md` (경로 A) 또는 Create: `scripts/slack_pull.py`, `scripts/slack_push.py` (경로 B)
+- Modify: `prompts/master.md`, `CLAUDE.md`
 
-- [ ] **Step 1: 분기 결정**
+- [ ] **Step 1: 채널 ID 확보**
 
-Task 1 Step 4 결과 확인:
-- **Slack MCP 가 headless 에서 보임 → 경로 A**
-- **`NO_SLACK_MCP` → 경로 B (봇 토큰)**. 봇 토큰/채널 ID 가 없으면 이 태스크를 dogfood 백로그로 옮기고 건너뛴다(사람 확인).
+사람에게 대상 Slack 채널명/ID를 받는다(미확보 시 이 태스크를 보류하고 사람 확인). `CLAUDE.md` 에 `SLACK_CHANNEL=<id 또는 #이름>` 한 줄로 기록.
 
-- [ ] **Step 2-A: 경로 A — master.md 에 Slack 단계 추가**
+- [ ] **Step 2: master.md 에 Slack 단계 구체화**
 
-`prompts/master.md` 의 사이클 절차 1과 6을 구체화한다:
-- 사이클 시작 시: Slack MCP 의 read 툴로 지정 채널의 새 메시지를 읽어, 각 메시지를 `python3 scripts/inbox.py add "<메시지>" --slug slack` 로 inbox 에 떨군다(이미 처리한 메시지는 timestamp 로 건너뛴다).
-- 사이클 끝에: 리포트 요약을 Slack send 툴로 지정 채널에 푸시한다.
-채널 ID 는 `CLAUDE.md` 에 `SLACK_CHANNEL=...` 로 명시한다(사람이 값 제공).
+`prompts/master.md` 의 사이클 절차 1(inbox 처리)과 6(리포트)에 추가:
+- 사이클 시작 시: `mcp__claude_ai_Slack__slack_read_channel` 로 `SLACK_CHANNEL` 의 새 메시지를 읽어, 마지막 처리 시각(`state/slack.cursor` 파일에 저장) 이후 메시지를 각각 `python3 scripts/inbox.py add "<메시지>" --slug slack` 로 떨군다. 처리 후 `state/slack.cursor` 를 최신 메시지 ts 로 갱신.
+- 사이클 끝에: `mcp__claude_ai_Slack__slack_send_message` 로 리포트 요약(🟢🟡🔴✅⚫ 카운트 + 🟡/🔴 상세)을 `SLACK_CHANNEL` 에 푸시.
 
 ```bash
 git add prompts/master.md CLAUDE.md
 git commit -m "feat(slack): master pulls inbox from / pushes reports to Slack via MCP"
 ```
 
-- [ ] **Step 2-B: 경로 B — 봇 토큰 스크립트 (MCP 불가 시)**
-
-`scripts/slack_pull.py`/`slack_push.py` 를 Slack Web API(`urllib` 표준 라이브러리, 토큰은 환경변수 `SLACK_BOT_TOKEN`)로 구현한다. pull 은 `conversations.history` 로 새 메시지를 받아 `inbox.add` 로 떨구고, push 는 `chat.postMessage`. 마스터는 사이클 시작/끝에 이 스크립트를 호출한다(master.md 에 단계 추가). 토큰/채널 미제공 시 dogfood 로 연기.
-
-(구현 시 실제 코드 작성. 표준 라이브러리만, requests 금지.)
-
 - [ ] **Step 3: Slack 왕복 스모크**
 
-지정 채널에 "테스트 일감 추가" 한 줄 → 마스터 1회 실행 → inbox 에 떨어졌는지 + 리포트 요약이 채널에 푸시됐는지 확인.
+지정 채널에 "테스트 일감 추가" 한 줄 → `python3 scripts/supervisor.py --once` → inbox(또는 task)에 반영됐는지 + 리포트 요약이 채널에 푸시됐는지 확인.
 
 ---
 
