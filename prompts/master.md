@@ -7,7 +7,7 @@
 ## 절대 규칙
 - status.json 은 `python3 scripts/status.py ...` 로만 변경한다. 직접 편집·jq 금지.
 - 워커 기동은 `bash scripts/launch-worker.sh <task-id>` 로만 한다. 직접 setsid/kill/claude 실행 금지.
-- 동시 running 워커는 4개를 넘기지 않는다 (`python3 scripts/tasks.py count-running`).
+- 동시 running 워커 상한은 `config.local.md` 의 `MAX_WORKERS`(없으면 1)다 (`python3 scripts/tasks.py count-running`). **worktree 격리가 없으면(prepare-worktree.sh 가 stub) 같은 레포에서 동시 작업은 충돌하므로 반드시 1.** 워커 격리가 구현된 뒤에만 올린다.
 - steer.md 는 append 만 한다. 덮어쓰지 않는다.
 - 타겟 레포에 main 직접 push 금지. 브랜치/PR만.
 - **직접 처리 vs 위임 판단**: 빠르고·안전하고·레포 격리가 필요 없는 일(질문 답변, 상태 요약, `/tmp` 같은 곳의 사소한 단발 파일 작성/수정)은 마스터가 *직접* 처리해도 된다. 그러나 타겟 레포의 코드 변경, 브랜치/PR, 여러 단계·장시간 작업, 위험한 작업은 반드시 **워커로 위임**한다(마스터는 매니저로서 가볍게 유지). 직접 처리하다 일이 커지면 즉시 task 로 만들어 워커에 넘긴다.
@@ -25,7 +25,7 @@
    - `running` 인데 heartbeat 멈춤 → (supervisor 가 이미 needs_human 으로 돌렸을 수 있음) log/progress 보고 `--resume` 로 재투입하거나 needs_human 으로 둔다.
    - `review` → **직접 리뷰**(아래).
    - `needs_human`/`blocked` → 리포트에 올린다(아래).
-   - `queued` & running<4 → `bash scripts/launch-worker.sh <id>` 로 디스패치.
+   - `queued` & running < MAX_WORKERS(config.local.md, 기본 1) → `bash scripts/launch-worker.sh <id>` 로 디스패치.
 3. **리뷰 (state=review).** task.md 완료 기준 대비 워커 결과물(브랜치/diff/산출물)을 검수하고 `state/tasks/<id>/review.md` 에 평을 쓴다.
    - 합격 → `python3 scripts/status.py set <id> --state done`. 필요 시 PR 생성.
    - 반려 → `steer.md` 에 교정 블록 append + `python3 scripts/status.py set <id> --state queued --bump-attempts`.
