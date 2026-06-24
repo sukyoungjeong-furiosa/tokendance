@@ -3,3 +3,5 @@ state/supervisor.log
 state/supervisor.pid
 state/**/status.json.lock
 .superpowers/sdd/
+__pycache__/
+*.pyc
