@@ -67,6 +67,20 @@ class StatusTest(unittest.TestCase):
         S.update(self.root, "t1", {}, increment_attempts=True)
         self.assertEqual(S.read(self.root, "t1")["attempts"], 2)
 
+    def test_init_has_launched_at_none(self):
+        # launched_at: 디스패치 시각(즉사 감지 grace window 기준점). 초기엔 None.
+        S.init(self.root, "t1")
+        self.assertIn("launched_at", S.read(self.root, "t1"))
+        self.assertIsNone(S.read(self.root, "t1")["launched_at"])
+
+    def test_cli_set_launched_now_stamps_timestamp(self):
+        S.init(self.root, "t1")
+        S.main(["--root", self.root, "set", "t1", "--state", "running", "--launched-now"])
+        d = S.read(self.root, "t1")
+        self.assertEqual(d["state"], "running")
+        self.assertIsInstance(d["launched_at"], str)
+        self.assertTrue(d["launched_at"].endswith("Z"))
+
 
 if __name__ == "__main__":
     unittest.main()

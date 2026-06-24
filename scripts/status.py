@@ -77,7 +77,8 @@ def init(root, task_id, title="", repo=""):
             "id": task_id, "title": title, "repo": repo,
             "state": "queued", "version": 1,
             "worker_pid": None, "worker_session_id": None, "branch": None,
-            "heartbeat": None, "created": _now(), "updated": _now(),
+            "heartbeat": None, "launched_at": None,
+            "created": _now(), "updated": _now(),
             "attempts": 0, "failure_reason": None,
         }
         _atomic_write(sp, data)
@@ -132,6 +133,8 @@ def main(argv=None):
     p.add_argument("--session")
     p.add_argument("--branch")
     p.add_argument("--failure-reason")
+    p.add_argument("--launched-now", action="store_true",
+                   help="launched_at 을 현재 시각으로 기록(워커 디스패치 시점)")
     p.add_argument("--bump-attempts", action="store_true")
     p.add_argument("--expected-version", type=int)
 
@@ -158,6 +161,8 @@ def main(argv=None):
             changes["branch"] = args.branch
         if args.failure_reason is not None:
             changes["failure_reason"] = args.failure_reason
+        if args.launched_now:
+            changes["launched_at"] = _now()
         print(json.dumps(update(args.root, args.task_id, changes,
                                 expected_version=args.expected_version,
                                 increment_attempts=args.bump_attempts)))
