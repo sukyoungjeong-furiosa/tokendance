@@ -55,5 +55,75 @@ class SupervisorTest(unittest.TestCase):
         self.assertEqual(S.read(self.root, "t1")["state"], "needs_human")
 
 
+class NextIntervalTest(unittest.TestCase):
+    def test_idle_backoff_increases_geometrically(self):
+        # idle 틱이 연속되면 base → base*f → base*f^2 ... 로 늘어난다.
+        i = SV.next_interval(1800, idle=True, base=1800, max_interval=21600, factor=2)
+        self.assertEqual(i, 3600)
+        i = SV.next_interval(i, idle=True, base=1800, max_interval=21600, factor=2)
+        self.assertEqual(i, 7200)
+        i = SV.next_interval(i, idle=True, base=1800, max_interval=21600, factor=2)
+        self.assertEqual(i, 14400)
+
+    def test_work_resets_to_base(self):
+        # 일이 생기면(idle=False) 직전 간격과 무관하게 base 로 즉시 복귀.
+        self.assertEqual(
+            SV.next_interval(14400, idle=False, base=1800, max_interval=21600, factor=2),
+            1800)
+
+    def test_clamps_at_max(self):
+        # base*f 가 max 를 넘으면 max 로 클램프.
+        self.assertEqual(
+            SV.next_interval(14400, idle=True, base=1800, max_interval=21600, factor=2),
+            21600)  # 14400*2=28800 → 21600
+
+    def test_stays_at_max_when_already_clamped(self):
+        self.assertEqual(
+            SV.next_interval(21600, idle=True, base=1800, max_interval=21600, factor=2),
+            21600)
+
+    def test_defaults_use_module_constants(self):
+        # 기본 인자(base/max/factor)는 모듈 상수를 쓴다.
+        self.assertEqual(SV.next_interval(SV.INTERVAL, idle=True),
+                         min(SV.INTERVAL * SV.BACKOFF_FACTOR, SV.MAX_INTERVAL))
+        self.assertEqual(SV.next_interval(SV.MAX_INTERVAL, idle=False), SV.INTERVAL)
+
+
+class HasActiveWorkTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = self.tmp.name
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_no_tasks_is_idle(self):
+        self.assertFalse(SV.has_active_work(self.root))
+
+    def test_queued_is_active(self):
+        TK.create_task(self.root, "t1")  # 기본 queued
+        self.assertTrue(SV.has_active_work(self.root))
+
+    def test_running_is_active(self):
+        TK.create_task(self.root, "t1")
+        S.update(self.root, "t1", {"state": "running"})
+        self.assertTrue(SV.has_active_work(self.root))
+
+    def test_review_is_active(self):
+        TK.create_task(self.root, "t1")
+        S.update(self.root, "t1", {"state": "review"})
+        self.assertTrue(SV.has_active_work(self.root))
+
+    def test_only_needs_human_or_blocked_is_idle(self):
+        # 사람/외부 대기 상태뿐이면 폴링을 늦춰도 되므로 idle.
+        TK.create_task(self.root, "t1")
+        S.update(self.root, "t1", {"state": "needs_human"})
+        TK.create_task(self.root, "t2")
+        S.update(self.root, "t2", {"state": "blocked"})
+        TK.create_task(self.root, "t3")
+        S.update(self.root, "t3", {"state": "done"})
+        self.assertFalse(SV.has_active_work(self.root))
+
+
 if __name__ == "__main__":
     unittest.main()
