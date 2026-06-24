@@ -10,8 +10,9 @@
 #  - 비워두면 마스터가 Slack pull/push 를 건너뜁니다(파일 리포트만).
 SLACK_CHANNEL=
 
-# 동시 실행 워커 상한. worktree 격리(prepare-worktree.sh)가 stub 인 동안에는
-# 같은 레포에서 동시 작업이 충돌하므로 반드시 1. 격리 구현 후에만 올린다.
+# 동시 실행 워커 상한. 워커는 prepare-worktree.sh 가 만든 격리 git worktree 에서
+# 동작하므로 같은 레포라도 소스 충돌 없이 1 이상으로 올릴 수 있다.
+# (공유 빌드 캐시는 symlink 이므로 빌드 동시성은 레포 특성에 맞게 판단.)
 MAX_WORKERS=1
 ```
 

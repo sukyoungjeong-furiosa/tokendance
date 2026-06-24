@@ -7,7 +7,7 @@
 ## 절대 규칙
 - status.json 은 `python3 scripts/status.py ...` 로만 변경한다. 직접 편집·jq 금지.
 - 워커 기동은 `bash scripts/launch-worker.sh <task-id>` 로만 한다. 직접 setsid/kill/claude 실행 금지.
-- 동시 running 워커 상한은 `config.local.md` 의 `MAX_WORKERS`(없으면 1)다 (`python3 scripts/tasks.py count-running`). **worktree 격리가 없으면(prepare-worktree.sh 가 stub) 같은 레포에서 동시 작업은 충돌하므로 반드시 1.** 워커 격리가 구현된 뒤에만 올린다.
+- 동시 running 워커 상한은 `config.local.md` 의 `MAX_WORKERS`(없으면 1)다 (`python3 scripts/tasks.py count-running`). 이제 워커는 `prepare-worktree.sh` 가 만든 격리 git worktree(브랜치 `tokendance/<id>`)에서 동작하므로 같은 레포라도 동시 작업이 소스 레벨에서 충돌하지 않는다 — `MAX_WORKERS` 를 1 이상으로 올려도 된다(공유 빌드 캐시는 symlink 라 빌드 동시성은 레포 특성에 맞게 판단).
 - steer.md 는 append 만 한다. 덮어쓰지 않는다.
 - 타겟 레포에 main 직접 push 금지. 브랜치/PR만.
 - **직접 처리 vs 위임 판단**: 빠르고·안전하고·레포 격리가 필요 없는 일(질문 답변, 상태 요약, `/tmp` 같은 곳의 사소한 단발 파일 작성/수정)은 마스터가 *직접* 처리해도 된다. 그러나 타겟 레포의 코드 변경, 브랜치/PR, 여러 단계·장시간 작업, 위험한 작업은 반드시 **워커로 위임**한다(마스터는 매니저로서 가볍게 유지). 직접 처리하다 일이 커지면 즉시 task 로 만들어 워커에 넘긴다.
@@ -32,6 +32,8 @@
 3. **리뷰 (state=review).** task.md 완료 기준 대비 워커 결과물(브랜치/diff/산출물)을 검수하고 `state/tasks/<id>/review.md` 에 평을 쓴다.
    - 합격 → `python3 scripts/status.py set <id> --state done`. 필요 시 PR 생성.
    - 반려 → `steer.md` 에 교정 블록 append + `python3 scripts/status.py set <id> --state queued --bump-attempts`.
+   - **worktree 회수**: 일감이 종료(done/failed)되면 격리 worktree 를 회수한다(브랜치는 PR 머지·검토 후에만 삭제). 경로는 `state/tasks/<id>/worktree.path`:
+     `WT=$(cat state/tasks/<id>/worktree.path); REPO=$(python3 scripts/status.py get <id> --field repo); git -C "$REPO" worktree remove --force "$WT"; git -C "$REPO" worktree prune`
 4. **지식 수확.** 워커가 log.md 에 남긴 "## 지식:" 블록 중 재사용 가치가 있는 것을 `library/playbooks/` 또는 `library/repos/<repo>.md` 로 승격하고 `library/index.md` 에 링크를 추가한다.
 5. **리포트.** `state/reports/<오늘날짜>.md` 에 append (없으면 생성):
    - 🟢 순항(running): 일감 + progress.md 한 줄 요약
