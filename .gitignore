@@ -1,8 +1,25 @@
-state/workers/
-state/supervisor.log
-state/supervisor.pid
-state/**/status.json.lock
+# tokendance 는 "에이전트 제품"을 배포하기 위한 레포다.
+# 이 인스턴스의 런타임 기록/설정/보안은 추적하지 않는다 (clone 시 빈 상태로 시작).
+
+# ── 런타임 인스턴스 상태 (일감·리포트·inbox·cursor·워커 로그) ──
+state/
+
+# ── 인스턴스 로컬 설정 / 보안 ──
+config.local.md
+.env
+.env.*
+*.local
+secrets.*
+*.token
+*.key
+*.pem
+credentials*.json
+
+# ── 에이전트가 축적하는 지식 (인스턴스별; index.md 스켈레톤만 추적) ──
+library/playbooks/
+library/repos/
+
+# ── 개발 부산물 ──
 .superpowers/sdd/
 __pycache__/
 *.pyc
-state/slack.cursor

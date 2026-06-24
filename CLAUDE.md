@@ -17,7 +17,7 @@
 - supervisor 기동/정지: `scripts/start.sh` / `scripts/stop.sh`.
 
 ## Slack (self-DM 모드)
-- SLACK_CHANNEL=U031M7W7ZGT   (self-DM; 실제 DM 채널 D032AV9JLMN)
+- 채널 ID 는 `config.local.md` 의 `SLACK_CHANNEL` 에 둔다(인스턴스/보안 값이라 git 추적 안 함). 미설정이면 Slack 연동을 건너뛴다. 템플릿: `config.example.md`.
 - MCP는 사용자 계정으로 동작하므로 마스터가 보낸 메시지도 "사용자"로 표시된다. 따라서:
   - **출력 마커**: 마스터가 보내는 모든 메시지는 맨 앞에 `🤖 tokendance` 로 시작한다.
   - **자기 메시지 무시**: DM을 읽을 때 `🤖 tokendance` 로 시작하는 메시지(=마스터 자신의 출력)는 건너뛰고, 그 외 사람 메시지만 inbox로 넣는다.

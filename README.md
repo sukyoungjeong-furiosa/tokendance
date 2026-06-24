@@ -21,7 +21,10 @@ inbox 큐를 읽어 **질문엔 직접 답하고, 사소한 일은 직접 처리
 ## 사용법
 
 ```bash
-# claude 바이너리 경로 주입 (버전 디렉토리는 바뀔 수 있으니 glob 로 최신 선택)
+# 1) 인스턴스 설정: 템플릿 복사 후 Slack 채널 등 채우기 (config.local.md 는 git 추적 안 됨)
+cp config.example.md config.local.md   # 그리고 SLACK_CHANNEL 값을 채운다 (비우면 Slack 생략)
+
+# 2) claude 바이너리 경로 주입 (버전 디렉토리는 바뀔 수 있으니 glob 로 최신 선택)
 export TOKENDANCE_CLAUDE="$(ls -dt /root/.vscode-server/extensions/anthropic.claude-code-*/resources/native-binary/claude | head -1)"
 
 scripts/start.sh     # supervisor 데몬 기동 (30분 주기)

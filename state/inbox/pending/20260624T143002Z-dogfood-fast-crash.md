@@ -1,1 +1,0 @@
-transient API 529 등으로 워커가 즉사한 경우를 더 빨리 감지/재시도하도록 개선하라(현재는 20분 staleness). repo: /root/src/tokendance

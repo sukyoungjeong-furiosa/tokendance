@@ -1,1 +1,0 @@
-리뷰 루프에 자동 테스트 실행/검증을 결합하라. repo: /root/src/tokendance
