@@ -16,5 +16,9 @@
 - root 실행이라 claude 기동 시 `IS_SANDBOX=1` + `--dangerously-skip-permissions` 필요.
 - supervisor 기동/정지: `scripts/start.sh` / `scripts/stop.sh`.
 
-## Slack (Task 11에서 채워짐)
-- SLACK_CHANNEL=<미설정>
+## Slack (self-DM 모드)
+- SLACK_CHANNEL=U031M7W7ZGT   (self-DM; 실제 DM 채널 D032AV9JLMN)
+- MCP는 사용자 계정으로 동작하므로 마스터가 보낸 메시지도 "사용자"로 표시된다. 따라서:
+  - **출력 마커**: 마스터가 보내는 모든 메시지는 맨 앞에 `🤖 tokendance` 로 시작한다.
+  - **자기 메시지 무시**: DM을 읽을 때 `🤖 tokendance` 로 시작하는 메시지(=마스터 자신의 출력)는 건너뛰고, 그 외 사람 메시지만 inbox로 넣는다.
+  - **중복 방지**: `state/slack.cursor` 에 마지막 처리한 메시지 ts를 저장. 읽을 때 `oldest=<cursor>` 로 그 이후만 가져온다.

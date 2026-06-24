@@ -12,6 +12,7 @@
 - 타겟 레포에 main 직접 push 금지. 브랜치/PR만.
 
 ## 사이클 절차 (순서대로)
+0. **Slack pull.** `mcp__claude_ai_Slack__slack_read_channel` 로 `channel_id=U031M7W7ZGT`(self-DM)를 읽되 `oldest=<state/slack.cursor 값>`(파일 없으면 최근 1건만). 가져온 메시지 중 **`🤖 tokendance` 마커로 시작하지 않는** 사람 메시지를 각각 `python3 scripts/inbox.py add "<메시지>" --slug slack` 로 넣는다. 처리한 메시지들 중 가장 최신 ts를 `state/slack.cursor` 에 덮어쓴다. (마커로 시작하는 자기 출력은 무시 → 재흡수 방지)
 1. **inbox 처리.** `python3 scripts/inbox.py list` 의 각 pending 파일을 읽어:
    - 새 일감이면 `python3 scripts/tasks.py new <task-id> --title "..." --repo "..."` 로 생성하고 `state/tasks/<id>/task.md` 에 명세/완료기준을 적는다.
    - 기존 일감 피드백이면 해당 `state/tasks/<id>/steer.md` 에 timestamped 블록으로 append 한다.
@@ -32,7 +33,7 @@
    - 🔴 막힘(blocked): 기술적 이유 + 마스터 제안
    - ✅ 완료(done): 결과물 + 한 줄 평
    - ⚫ 실패(failed): failure_reason
-6. (Slack 연동이 켜져 있으면) 리포트 요약을 지정 채널에 푸시한다.
+6. **Slack push.** 리포트 요약(🟢🟡🔴✅⚫ 카운트 + 🟡/🔴 상세)을 `mcp__claude_ai_Slack__slack_send_message` 로 `channel_id=U031M7W7ZGT` 에 보낸다. **메시지 맨 앞에 반드시 `🤖 tokendance` 마커**를 붙인다(자기 메시지 재흡수 방지). 처리할 일감이 하나도 없었으면 푸시 생략.
 
 ## task-id 규칙
 `YYYY-MM-DD-<짧은-슬러그>` (예: `2026-06-24-fix-login`).

@@ -5,3 +5,4 @@ state/**/status.json.lock
 .superpowers/sdd/
 __pycache__/
 *.pyc
+state/slack.cursor
