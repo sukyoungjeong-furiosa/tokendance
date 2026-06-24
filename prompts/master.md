@@ -29,7 +29,12 @@
    - `review` → **직접 리뷰**(아래).
    - `needs_human`/`blocked` → 리포트에 올린다(아래).
    - `queued` & running < MAX_WORKERS(config.local.md, 기본 1) → `bash scripts/launch-worker.sh <id>` 로 디스패치.
-3. **리뷰 (state=review).** task.md 완료 기준 대비 워커 결과물(브랜치/diff/산출물)을 검수하고 `state/tasks/<id>/review.md` 에 평을 쓴다.
+3. **리뷰 (state=review).**
+   - **3a. 자동 검증 먼저.** `bash scripts/run-checks.sh <id>` 를 돌린다(테스트는 워커 worktree 안에서 실행되어 격리·main 무변경). 결과는 `state/tasks/<id>/checks.json`(기계용) + `checks.md`(사람용)에 남는다. exit code: `0`=통과 / `1`=실패 / `2`=스킵(검증 명령 없음) / `3`=오류.
+     - **실패(exit 1)** → 자동 반려: `steer.md` 에 "자동 테스트 실패" 교정 블록(실패한 명령 + `checks.md` 경로)을 append 하고 `python3 scripts/status.py set <id> --state queued --bump-attempts`. 수동 리뷰는 생략하고 다음 일감으로(review.md 에 한 줄 기록).
+     - **스킵(exit 2)/오류(exit 3)** → 자동 반려하지 않는다. review.md 에 사실을 적고 수동 리뷰로 진행. (레포에 검증 명령이 없으면 필요 시 `state/tasks/<id>/check.cmd` 또는 타겟 레포 `.tokendance-checks` 로 명령을 지정.)
+     - **통과(exit 0)** → 수동 리뷰로 진행.
+   - **3b. 수동 리뷰.** task.md 완료 기준 대비 워커 결과물(브랜치/diff/산출물)을 검수하고 `state/tasks/<id>/review.md` 에 평을 쓴다. review.md 는 마스터 소유 — run-checks 는 review.md 를 건드리지 않으니 자동검증 결과는 `checks.md` 에서 가져와 요약 인용한다.
    - 합격 → `python3 scripts/status.py set <id> --state done`. 필요 시 PR 생성.
    - 반려 → `steer.md` 에 교정 블록 append + `python3 scripts/status.py set <id> --state queued --bump-attempts`.
    - **worktree 회수**: 일감이 종료(done/failed)되면 격리 worktree 를 회수한다(브랜치는 PR 머지·검토 후에만 삭제). 경로는 `state/tasks/<id>/worktree.path`:

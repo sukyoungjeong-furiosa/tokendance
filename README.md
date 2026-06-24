@@ -55,12 +55,19 @@ cat state/reports/<날짜>.md                    # 일자 리포트
 ```
 state/inbox/{pending,processed}/   사람/Slack 입력 큐
 state/tasks/<id>/                  task.md, status.json, progress.md, steer.md, log.md, review.md
+                                   checks.json/checks.md/checks.log  (review 단계 자동검증 산출물; run-checks.sh 가 기록)
 state/reports/<날짜>.md             일자 리포트
 state/slack.cursor                 Slack 중복 방지 포인터 (gitignored)
 library/{index.md,playbooks/,repos/}   지식 라이브러리 (점진 탐색)
 prompts/{master.md,worker.md}      마스터/워커 시스템 프롬프트
-scripts/{supervisor,status,tasks,inbox}.py, launch-worker.sh, prepare-worktree.sh, start/stop.sh
+scripts/{supervisor,status,tasks,inbox,checks_report}.py, launch-worker.sh, prepare-worktree.sh, run-checks.sh, start/stop.sh
 ```
+
+### review 자동검증 (run-checks)
+`review` 상태가 되면 마스터가 `bash scripts/run-checks.sh <id>` 로 타겟 레포 테스트를 **워커 worktree 안에서** 돌린다(격리·main 무변경).
+검증 명령은 `state/tasks/<id>/check.cmd`(태스크 오버라이드) → 타겟 레포 `.tokendance-checks`(매니페스트) → 자동탐지(cargo/go/npm/python/make) 순으로 해석하고, 없으면 스킵한다.
+결과는 `checks.json`(기계용)/`checks.md`(사람용)/`checks.log`(전체 로그)에 남고, exit code 는 `0`=통과/`1`=실패/`2`=스킵/`3`=오류.
+실패 시 마스터가 자동 반려한다(steer append + `queued --bump-attempts`).
 
 ## 불변 규칙
 - status.json 변경은 `scripts/status.py` 로만 (flock + atomic).
@@ -72,4 +79,8 @@ scripts/{supervisor,status,tasks,inbox}.py, launch-worker.sh, prepare-worktree.s
 ## 테스트
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py' -v
+bash tests/test_prepare_worktree.sh
+bash tests/test_launch_worker.sh
+bash tests/test_run_checks.sh
 ```
+(이 묶음은 레포 루트 `.tokendance-checks` 에도 등록돼 있어 dogfood 시 `run-checks.sh` 가 그대로 실행한다.)
