@@ -57,6 +57,15 @@ class StatusTest(unittest.TestCase):
         self.assertEqual(after["version"], before["version"] + 1)
         self.assertIsNotNone(after["heartbeat"])
         self.assertEqual(after["state"], before["state"])
+        self.assertIsInstance(after["updated"], str)
+        self.assertTrue(len(after["updated"]) > 0)
+
+    def test_bump_attempts_increments(self):
+        S.init(self.root, "t1")
+        S.update(self.root, "t1", {}, increment_attempts=True)
+        self.assertEqual(S.read(self.root, "t1")["attempts"], 1)
+        S.update(self.root, "t1", {}, increment_attempts=True)
+        self.assertEqual(S.read(self.root, "t1")["attempts"], 2)
 
 
 if __name__ == "__main__":

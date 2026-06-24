@@ -35,7 +35,11 @@ class _Lock:
     def __enter__(self):
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         self.fd = open(self.path, "w")
-        fcntl.flock(self.fd, fcntl.LOCK_EX)
+        try:
+            fcntl.flock(self.fd, fcntl.LOCK_EX)
+        except BaseException:
+            self.fd.close()
+            raise
         return self
 
     def __exit__(self, *exc):
@@ -80,7 +84,7 @@ def init(root, task_id, title="", repo=""):
         return data
 
 
-def update(root, task_id, changes, expected_version=None):
+def update(root, task_id, changes, expected_version=None, increment_attempts=False):
     with _Lock(_lock_path(root, task_id)):
         sp = _status_path(root, task_id)
         if not os.path.exists(sp):
@@ -90,12 +94,13 @@ def update(root, task_id, changes, expected_version=None):
         if expected_version is not None and data.get("version") != expected_version:
             raise ValueError(
                 f"version mismatch: expected {expected_version}, got {data.get('version')}")
-        if "state" in changes and changes["state"] not in STATES:
-            raise ValueError(f"invalid state: {changes['state']}")
-        merged = {**data, **changes}
-        if merged.get("state") == "failed" and not merged.get("failure_reason"):
-            raise ValueError("state=failed requires failure_reason")
         data.update(changes)
+        if increment_attempts:
+            data["attempts"] = data.get("attempts", 0) + 1
+        if "state" in data and data["state"] not in STATES:
+            raise ValueError(f"invalid state: {data['state']}")
+        if data.get("state") == "failed" and not data.get("failure_reason"):
+            raise ValueError("state=failed requires failure_reason")
         data["version"] = data.get("version", 0) + 1
         data["updated"] = _now()
         _atomic_write(sp, data)
@@ -153,11 +158,9 @@ def main(argv=None):
             changes["branch"] = args.branch
         if args.failure_reason is not None:
             changes["failure_reason"] = args.failure_reason
-        if args.bump_attempts:
-            cur = read(args.root, args.task_id)
-            changes["attempts"] = cur.get("attempts", 0) + 1
         print(json.dumps(update(args.root, args.task_id, changes,
-                                expected_version=args.expected_version)))
+                                expected_version=args.expected_version,
+                                increment_attempts=args.bump_attempts)))
     elif args.cmd == "get":
         d = read(args.root, args.task_id)
         print(d[args.field] if args.field else json.dumps(d, ensure_ascii=False))
