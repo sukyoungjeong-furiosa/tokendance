@@ -26,7 +26,8 @@ def health_check(root, now=None, stale_seconds=STALE_SECONDS):
     생사 판정을 pid 가 아니라 heartbeat 신선도로 하는 이유: setsid 후 claude 가
     재fork/재부모화하여 launch 시점의 pid 가 실제 워커 pid 와 불일치(Task 1 스파이크).
     """
-    now = now or datetime.now(timezone.utc)
+    if now is None:
+        now = datetime.now(timezone.utc)
     dead = []
     for d in TK.list_tasks(root, state="running"):
         hb = d.get("heartbeat")

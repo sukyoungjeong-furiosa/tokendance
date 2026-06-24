@@ -163,7 +163,12 @@ def main(argv=None):
                                 increment_attempts=args.bump_attempts)))
     elif args.cmd == "get":
         d = read(args.root, args.task_id)
-        print(d[args.field] if args.field else json.dumps(d, ensure_ascii=False))
+        if args.field:
+            if args.field not in d:
+                raise SystemExit(f"no such field: {args.field} (fields: {', '.join(d)})")
+            print(d[args.field])
+        else:
+            print(json.dumps(d, ensure_ascii=False))
     elif args.cmd == "heartbeat":
         print(json.dumps(heartbeat(args.root, args.task_id)))
 
