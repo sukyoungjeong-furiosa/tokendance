@@ -26,6 +26,7 @@
 2. **상태 스캔.** `python3 scripts/tasks.py list` 의 각 일감을 상태별로 처리:
    - `running` & heartbeat 신선 → 냅둔다. `state/tasks/<id>/progress.md` 를 읽어 엉뚱하면 steer.md 에 교정 블록 append.
    - `running` 인데 heartbeat 멈춤 → (supervisor 가 이미 needs_human 으로 돌렸을 수 있음) log/progress 보고 `--resume` 로 재투입하거나 needs_human 으로 둔다.
+     - 참고: supervisor 가 "기동 직후 즉사(transient)"한 워커를 staleness(20분)보다 빨리 감지해 `attempts` 한도 내에서 자동 in-place 재기동한다(상태는 `running` 유지). 따라서 `running` 인데 `attempts` 가 올라가 있으면 자동 재시도된 흔적이다 — 마스터가 중복 디스패치하지 말 것. 한도 초과 시 supervisor 가 `needs_human`(failure_reason 명시)으로 올린다.
    - `review` → **직접 리뷰**(아래).
    - `needs_human`/`blocked` → 리포트에 올린다(아래).
    - `queued` & running < MAX_WORKERS(config.local.md, 기본 1) → `bash scripts/launch-worker.sh <id>` 로 디스패치.

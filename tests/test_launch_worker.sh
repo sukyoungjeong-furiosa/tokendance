@@ -35,10 +35,13 @@ sleep 1
 STATE="$(python3 "$WORK/scripts/status.py" --root "$WORK" get t1 --field state)"
 PID="$(python3 "$WORK/scripts/status.py" --root "$WORK" get t1 --field worker_pid)"
 test "$STATE" = "running" || { echo "FAIL: state=$STATE"; exit 1; }
-# 주의: fake-claude 는 재fork 를 안 하므로 $! == 실제 pid 라 이 검사가 유효하다.
-# 실제 claude 바이너리는 재fork/재부모화하여 pid 가 드리프트하므로(스파이크 확인),
-# 운영 생사 판정은 pid 가 아니라 heartbeat staleness(supervisor.health_check)로 한다.
+# worker_pid 는 내부 bash 가 pidfile 에 기록한 "실제 워커 pid"다(setsid 재fork 드리프트 회피).
+# 즉사 감지(supervisor.detect_fast_crash)의 보조 신호로 신뢰성 있게 쓰인다.
+# 주 생사 판정은 여전히 heartbeat(progress/staleness)이고 pid 는 보조다.
 test -n "$PID" && kill -0 "$PID" 2>/dev/null || { echo "FAIL: worker pid not alive ($PID)"; exit 1; }
+# 캡처된 pid 가 pidfile 의 값과 일치하는지(실제 워커 pid 캡처 검증)
+test "$PID" = "$(cat "$WORK/state/workers/t1.pid")" || {
+  echo "FAIL: worker_pid($PID) != pidfile($(cat "$WORK/state/workers/t1.pid"))"; exit 1; }
 test -f "$WORK/state/workers/t1.log" || { echo "FAIL: no worker log"; exit 1; }
 # 워커가 격리된 worktree 를 cwd 로 기동됐는지
 WT="$WORK/state/worktrees/t1"
