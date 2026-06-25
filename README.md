@@ -1,100 +1,114 @@
 # tokendance
 
-상시 호스트 위에서 코딩 일감을 자율 관리하는 **마스터 에이전트 하네스**.
-30분마다 깨어나 일감을 격리된 워커 프로세스에 시키고, 결과물을 직접 리뷰하고,
-진행/판단 필요 지점을 Slack DM으로 보고하며, 당신의 피드백을 워커에 다시 주입한다.
+**상시 켜진 호스트 위에서 당신의 코딩 일감을 스스로 관리하는 자율 마스터 에이전트.**
+
+Slack 봇에게 일감을 한 줄 던지면 — 마스터가 깨어나 격리된 워커에게 시키고, 결과물을 직접
+리뷰하고, 진행 상황과 "판단이 필요한 지점"을 당신에게 보고합니다. 막히면 솔직히 말하고, 잘
+풀리면 조용히 처리합니다. **사람은 봇과 대화만 하면 됩니다 — 나머지는 에이전트들이 합니다.**
+
+---
+
+## 핵심 아이디어
+
+- **상시 + 자율.** 사람 입력이 없어도 멈추지 않습니다. 주기적으로 깨어나 일감 풀을 보고,
+  새 메시지가 오면 즉시 반응하고, 할 일이 없으면 점점 더 드물게 깨어납니다(idle 백오프).
+
+- **워커 = 독립 OS 프로세스.** 마스터는 일감을 "코드로 띄운 별도 `claude` 프로세스"(워커)에
+  맡기고 기다리지 않고 잠듭니다. 워커는 자기 수명대로 살다 끝나면 결과를 파일에 남깁니다.
+  하네스 세션에 묶이지 않아 진짜 fire-and-forget이 됩니다.
+
+- **격리로 얻는 효율.** 일감끼리도, 마스터↔워커도 컨텍스트를 공유하지 않습니다. 각자 깨끗한
+  머리로 자기 일만. 워커는 격리된 git worktree에서 작업하므로 동시에 여러 개가 돌아도 안 부딪힙니다.
+
+- **파일이 단일 진실원.** 모든 상태와 소통은 레포 안 파일에 있습니다. 연속성은 "살아있는
+  프로세스"가 아니라 "상태 파일"에 사니, 마스터가 죽었다 깨어나도 파일을 보고 이어갑니다.
+
+- **마스터가 직접 리뷰.** 워커 결과물을 마스터가 검수해 합격/반려를 판단합니다(자동 테스트도 곁들여).
+  진행 중인 워커에게 중간 의견(steer)도 주입할 수 있습니다.
+
+- **사람 인터페이스 = Slack 봇.** 폰에서 봇에게 던지고 받습니다. 받는 즉시 "받았어요 + 현재
+  상태" 가 오고, 처리되면 결과가 옵니다. 당신 메시지만 반응합니다.
+
+- **스스로 개선한다(dogfooding).** tokendance의 개선 과제도 일감으로 넣으면, tokendance가
+  자기 코드를 워커로 고쳐 PR로 올립니다. 실제로 워커 격리·자기 회복·멀티레포 지원 등을 스스로 구현했습니다.
+
+- **배우고 정리한다.** 작업에서 얻은 노하우/레포 지식을 라이브러리로 축적하고, 주기적으로
+  스스로 다듬습니다(중복 병합·재분류·구조화). 불확실한 지식은 1급으로 올리기 전에 당신 검토를 받습니다.
+
+## 사람이 하는 일
+
+**Slack에서 tokendance 봇에게 DM 한 줄.** 일감이든 질문이든 피드백이든.
+나머지(분류·실행·리뷰·보고)는 마스터와 워커가 합니다.
+
+진행이 궁금하면 봇에게 물어보면 됩니다("지금 상태 알려줘"). 가동/설정은 보통 에이전트에게
+시키지만, 직접 하려면 아래 레퍼런스를 보세요.
+
+## 더 읽을거리
 
 - 설계: [docs/superpowers/specs/2026-06-24-tokendance-master-agent-design.md](docs/superpowers/specs/2026-06-24-tokendance-master-agent-design.md)
 - 구현 플랜: [docs/superpowers/plans/2026-06-24-tokendance-master-agent-mvp.md](docs/superpowers/plans/2026-06-24-tokendance-master-agent-mvp.md)
-- 기반 검증: [docs/superpowers/spikes/2026-06-24-foundation-findings.md](docs/superpowers/spikes/2026-06-24-foundation-findings.md)
+- 기반 검증(왜 이렇게 만들었나): [docs/superpowers/spikes/2026-06-24-foundation-findings.md](docs/superpowers/spikes/2026-06-24-foundation-findings.md)
 
-## 아키텍처 (한 단락)
+---
 
-`scripts/supervisor.py`(상주 루프)가 30분마다: ① heartbeat 신선도로 죽은 워커를
-needs_human 으로 정리하고 ② headless `claude` 마스터를 1회 기동한다. supervisor 자신은
-`scripts/supervise.sh` keepalive 래퍼가 감시해 죽으면 자동 재기동한다(빠른 크래시는 백오프,
-`flock` 로 중복 방지). Slack 봇 DM 수신은 supervisor가 60초마다 폴링해 inbox 로 넣는다(LLM 없이).
-마스터는 inbox 큐를 읽어 **질문엔 직접 답하고(봇으로), 사소한 일은 직접 처리하고, 본격 코딩 일감은**
-`scripts/launch-worker.sh` 로 워커(독립 OS 프로세스, `setsid` 로 detach)를 띄운다 — 기다리지
-않고 잠든다. 워커는 깨끗한 컨텍스트로 작업하며 progress/heartbeat/steer 파일로만 소통한다.
-다음 깨어남에 마스터가 결과물을 직접 리뷰하고(합격→done, 반려→재투입) 리포트를 DM에 푸시한다.
-모든 상태는 레포 안 파일이 단일 진실원이며 git 으로 추적된다.
+# 레퍼런스 (운영·내부 — 대개 에이전트가 다룸)
 
-## 사용법
+### 한 단락 동작 요약
+`scripts/supervisor.py`(상주 루프)가 60초마다 워커 헬스/Slack을 살피고, 주기적으로 headless
+`claude` 마스터를 1회 기동한다. supervisor 자신은 `supervise.sh` keepalive 래퍼가 감시해
+죽으면 재기동한다. 마스터는 inbox(=Slack 폴링 + 파일 입력)를 읽어 질문엔 직접 답하고, 사소한
+일은 직접 하고, 본격 코딩 일감은 `launch-worker.sh`로 격리 워커를 띄운다. 워커는 progress/
+heartbeat/steer 파일로만 소통하고, 끝나면 마스터가 다음 깨어남에 리뷰한다.
 
+### 설정 & 가동
 ```bash
-# 1) 인스턴스 설정: 템플릿 복사 후 채우기 (config.local.md 는 git 추적 안 됨)
-cp config.example.md config.local.md
-#   - SLACK_BOT_TOKEN : Slack 앱의 Bot User OAuth Token (xoxb-…)
-#   - SLACK_CHANNEL   : 봇과 DM 할 사용자의 Slack user id (예: U0XXXXXXX)
-#   둘 중 하나라도 비면 Slack 연동을 건너뛴다(파일/터미널로만 사용).
+cp config.example.md config.local.md      # 인스턴스 설정(git 미추적). 채울 값:
+#   SLACK_BOT_TOKEN : Slack 앱 Bot User OAuth Token (xoxb-…)   ┐ 둘 다 있어야
+#   SLACK_CHANNEL   : 봇과 DM 할 사용자 Slack user id (U0…)     ┘ Slack 연동 켜짐
+#   MAX_WORKERS(기본1) · POLL_INTERVAL(기본1800s) · MASTER_SESSION_MAX_CYCLES(기본20)
 
-# 2) claude 바이너리 경로 주입 (버전 디렉토리는 바뀔 수 있으니 glob 로 최신 선택)
 export TOKENDANCE_CLAUDE="$(ls -dt /root/.vscode-server/extensions/anthropic.claude-code-*/resources/native-binary/claude | head -1)"
-
-scripts/start.sh     # supervisor 데몬 기동 (keepalive 래퍼가 감시; 30분 주기)
-scripts/stop.sh      # 정지 (래퍼 프로세스그룹째 종료 → 재기동 안 함)
-python3 scripts/supervisor.py --once     # 수동으로 한 사이클 즉시 실행
-python3 scripts/supervisor.py metrics    # 마지막 tick 시각/살아있는 워커 수 등 메트릭 요약
+scripts/start.sh        # 데몬 기동(keepalive 래퍼가 감시)
+scripts/stop.sh         # 정지
+python3 scripts/supervisor.py --once      # 수동 1사이클
+python3 scripts/supervisor.py metrics     # 마지막 tick 메트릭
 ```
+Slack 봇 사용 전 한 번: 앱 설정 → App Home → **Messages Tab** 켜기(봇에게 DM 가능해짐).
 
-### supervisor 관측성
-- `state/supervisor.ticks.jsonl` — monitor tick 당 JSON 1줄(타임스탬프·검사 워커 수·상태 전이). 5MB 초과 시 `.jsonl.1` 로 회전(직전 백업 1개만, 디스크 bounded).
-- `state/supervisor.metrics.json` — 마지막 tick 요약 스냅샷(`supervisor.py metrics` 가 읽는 경로).
-- `state/supervisor.respawn.log` — keepalive 재기동 이벤트.
-- `state/supervisor.log` — 사람용 텍스트 로그(마스터 stdout 과 섞임).
+### 일감 주는 경로 (전부 inbox 로 수렴)
+- **Slack 봇 DM**(권장): supervisor가 60초마다 폴링 → inbox. 너의 메시지만 처리(봇/타인 무시).
+- **파일/터미널**: `python3 scripts/inbox.py add "할 일" --slug x` 또는 `state/inbox/pending/`에 `.md` 투입.
 
-### 일감/피드백 주는 법
-- **Slack 봇 DM** (권장): tokendance Slack 봇 앱과의 DM에 한 줄 보내면, supervisor가 60초마다
-  폴링해 inbox 에 넣고(수신 즉시 "받았어요 + 상태요약" ack), 마스터가 처리해 그 DM 으로 답·리포트한다.
-  봇 토큰으로 동작하므로 **너의 메시지만** 처리하고 봇 자신·타인 메시지는 무시한다.
-  (봇에게 DM 하려면 Slack 앱 설정 → App Home → Messages Tab 을 켜야 한다.)
-- **파일**: `python3 scripts/inbox.py add "할 일 한 줄" --slug mytask` (또는
-  `state/inbox/pending/` 에 `.md` 파일을 직접 떨궈도 됨).
-- **터미널**: 위 명령을 직접 실행.
-
-### 상태 보는 법
+### 상태 보기 / 진행 중 워커 조향
 ```bash
-python3 scripts/tasks.py list                 # 모든 일감 + 상태
-python3 scripts/status.py get <task-id>       # 한 일감의 status.json
-cat state/tasks/<task-id>/progress.md         # 워커의 현재 진행 (peek)
-cat state/reports/<날짜>.md                    # 일자 리포트
+python3 scripts/tasks.py list                 # 일감 + 상태
+python3 scripts/status.py get <id>            # status.json
+cat state/tasks/<id>/progress.md              # 워커 진행(peek)
+echo -e "## $(date -u +%FT%TZ)\n이렇게 해줘" >> state/tasks/<id>/steer.md   # 조향(append)
 ```
 
-### 진행 중 워커에 의견 주입 (steer)
-`state/tasks/<task-id>/steer.md` 에 timestamped 블록을 append 하면 워커가 다음 체크포인트에서 반영.
-
-## 상태 디렉토리
-
+### 파일 레이아웃
 ```
-state/inbox/{pending,processed}/   사람/Slack 입력 큐
-state/tasks/<id>/                  task.md, status.json, progress.md, steer.md, log.md, review.md
-                                   checks.json/checks.md/checks.log  (review 단계 자동검증 산출물; run-checks.sh 가 기록)
+state/inbox/{pending,processed}/   입력 큐
+state/tasks/<id>/                  task.md · status.json · progress.md · steer.md · log.md · review.md
 state/reports/<날짜>.md             일자 리포트
-state/slack.cursor                 Slack 중복 방지 포인터 (gitignored)
-library/{index.md,playbooks/,repos/}   지식 라이브러리 (harvest 생성물 — gitignored, 인스턴스별)
-prompts/master/*.md, prompts/worker.md, prompts/knowledge-block.template.md   시스템 프롬프트(마스터는 관심사별 분할)
-scripts/{supervisor,status,tasks,inbox,checks_report,harvest_knowledge,config,prompt,report,checkpoint,finish}.py, launch-worker.sh, prepare-worktree.sh, run-checks.sh, supervise.sh, start/stop.sh
+state/worktrees/<id>/              워커 격리 작업트리
+prompts/master/*.md                마스터 시스템 프롬프트(관심사별 분할: persona/tools/process/rules)
+prompts/worker.md, knowledge-block.template.md
+library/                           지식 라이브러리(harvest 생성물 — gitignored, 인스턴스별)
+scripts/                           supervisor·status·tasks·inbox·cycle·config·prompt·report·
+                                   checkpoint·finish·harvest_knowledge .py, *.sh
 ```
 
-### review 자동검증 (run-checks)
-`review` 상태가 되면 마스터가 `bash scripts/run-checks.sh <id>` 로 타겟 레포 테스트를 **워커 worktree 안에서** 돌린다(격리·main 무변경).
-검증 명령은 `state/tasks/<id>/check.cmd`(태스크 오버라이드) → 타겟 레포 `.tokendance-checks`(매니페스트) → 자동탐지(cargo/go/npm/python/make) 순으로 해석하고, 없으면 스킵한다.
-결과는 `checks.json`(기계용)/`checks.md`(사람용)/`checks.log`(전체 로그)에 남고, exit code 는 `0`=통과/`1`=실패/`2`=스킵/`3`=오류.
-실패 시 마스터가 자동 반려한다(steer append + `queued --bump-attempts`).
+### 불변 규칙
+- status.json 변경은 `scripts/status.py`로만(flock + atomic). 워커 기동은 `scripts/launch-worker.sh`로만.
+- 타겟 레포 변경은 브랜치/PR만 — main 직접 push 금지.
+- 자동화 도구는 Python 표준 라이브러리만(외부 패키지/jq 불사용).
+- root 실행 시 claude 기동에 `IS_SANDBOX=1`. 인증은 구독 OAuth(종량 API 키 아님).
 
-## 불변 규칙
-- status.json 변경은 `scripts/status.py` 로만 (flock + atomic).
-- 워커 기동은 `scripts/launch-worker.sh` 로만.
-- 타겟 레포 변경은 브랜치/PR만. main 직접 push 금지.
-- 자동화 도구는 Python 표준 라이브러리만 (외부 패키지/jq 불사용).
-- root 실행 시 claude 기동에 `IS_SANDBOX=1` 필요.
-
-## 테스트
+### 테스트
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py' -v
-bash tests/test_prepare_worktree.sh
-bash tests/test_launch_worker.sh
-bash tests/test_run_checks.sh
+bash tests/test_prepare_worktree.sh && bash tests/test_launch_worker.sh && bash tests/test_run_checks.sh
 ```
-(이 묶음은 레포 루트 `.tokendance-checks` 에도 등록돼 있어 dogfood 시 `run-checks.sh` 가 그대로 실행한다.)
+(레포 루트 `.tokendance-checks` 에 등록돼 있어 dogfood 시 `run-checks.sh`가 그대로 검증한다.)
