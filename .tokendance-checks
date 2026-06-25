@@ -3,4 +3,5 @@
 python3 -m unittest discover -s tests -p 'test_*.py'
 bash tests/test_prepare_worktree.sh
 bash tests/test_launch_worker.sh
+bash tests/test_launch_worker_resume.sh
 bash tests/test_run_checks.sh

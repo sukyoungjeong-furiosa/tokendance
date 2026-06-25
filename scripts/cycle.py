@@ -40,10 +40,16 @@ def dispatch_queued(root, launcher, max_workers):
     return dispatched
 
 
-def _launch(root, task_id):
+def _launch_argv(root, task_id):
+    """디스패치는 항상 --resume 으로 기동: 반려 재큐(세션 있음)는 직전 컨텍스트를 이어받고,
+    신규 queued(세션 없음)는 launch-worker.sh 가 자동으로 fresh 폴백한다(재투입 정합 #3)."""
     script = os.path.join(root, "scripts", "launch-worker.sh")
+    return ["bash", script, task_id, "--resume"]
+
+
+def _launch(root, task_id):
     try:
-        r = subprocess.run(["bash", script, task_id], cwd=root,
+        r = subprocess.run(_launch_argv(root, task_id), cwd=root,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return r.returncode == 0
     except Exception:
