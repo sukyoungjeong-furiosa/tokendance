@@ -11,7 +11,7 @@
 - steer.md 는 append 만 한다. 덮어쓰지 않는다.
 - 타겟 레포에 main 직접 push 금지. 브랜치/PR만.
 - **직접 처리 vs 위임 판단**: 빠르고·안전하고·레포 격리가 필요 없는 일(질문 답변, 상태 요약, `/tmp` 같은 곳의 사소한 단발 파일 작성/수정)은 마스터가 *직접* 처리해도 된다. 그러나 타겟 레포의 코드 변경, 브랜치/PR, 여러 단계·장시간 작업, 위험한 작업은 반드시 **워커로 위임**한다(마스터는 매니저로서 가볍게 유지). 직접 처리하다 일이 커지면 즉시 task 로 만들어 워커에 넘긴다.
-- **시각 표기는 한국시간(KST).** 사람에게 보여주는 모든 시각(Slack 메시지·리포트)은 KST 로 쓴다. 현재 시각은 추측하지 말고 `TZ='Asia/Seoul' date '+%Y-%m-%d %H:%M KST'` 로 정확히 구해서 표기한다.
+- **시각 표기는 한국시간(KST).** 사람에게 보여주는 모든 시각(Slack 메시지·리포트)은 KST 로 쓴다. 현재 시각은 추측하지 말고 `date -u -d '+9 hours' '+%Y-%m-%d %H:%M KST'` 로 정확히 구해서 표기한다. ⚠️ `TZ='Asia/Seoul' date` 는 쓰지 마라 — 이 컨테이너엔 tzdata(`/usr/share/zoneinfo/Asia/Seoul`)가 없어서 TZ 가 조용히 UTC 로 폴백된다(결과적으로 9시간 빠르게 찍힘). KST 는 DST 없으니 항상 UTC+9 고정 오프셋이라 위 방식이 안전하다.
 - **롤링 노트(연속성)**: 마스터의 누적 기억은 세션 컨텍스트가 아니라 `state/master-notes.md` 파일에 둔다. 사이클 **시작에 읽고**, **끝에 갱신**한다(아래 절차).
 
 ## 사이클 절차 (순서대로)
@@ -41,7 +41,7 @@
    - 🔴 막힘(blocked): 기술적 이유 + 마스터 제안
    - ✅ 완료(done): 결과물 + 한 줄 평
    - ⚫ 실패(failed): failure_reason
-6. **Slack push.** (`SLACK_CHANNEL` 설정 시) 리포트 요약(🟢🟡🔴✅⚫ 카운트 + 🟡/🔴 상세)을 `mcp__claude_ai_Slack__slack_send_message` 로 `channel_id=<SLACK_CHANNEL>` 에 보낸다. **메시지 맨 앞에 반드시 `🤖 tokendance` 마커**를 붙이고, 시각은 KST(`TZ='Asia/Seoul' date` 로 구함)로 표기한다. 처리할 일감이 하나도 없었으면 푸시 생략.
+6. **Slack push.** (`SLACK_CHANNEL` 설정 시) 리포트 요약(🟢🟡🔴✅⚫ 카운트 + 🟡/🔴 상세)을 `mcp__claude_ai_Slack__slack_send_message` 로 `channel_id=<SLACK_CHANNEL>` 에 보낸다. **메시지 맨 앞에 반드시 `🤖 tokendance` 마커**를 붙이고, 시각은 KST(`date -u -d '+9 hours'` 로 구함 — `TZ='Asia/Seoul'` 금지, tzdata 없어 UTC 폴백됨)로 표기한다. 처리할 일감이 하나도 없었으면 푸시 생략.
 7. **롤링 노트 갱신.** `state/master-notes.md` 를 간결하게(한 화면 이내) 다시 쓴다: 현재 큰 그림 / 진행 중인 일감과 맥락 / 최근 내린 판단 / 다음 사이클에 신경쓸 것. 길어지면 오래된 내용은 압축·삭제해 bounded 유지.
 
 ## task-id 규칙
