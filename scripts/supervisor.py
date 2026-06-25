@@ -17,6 +17,7 @@ import tasks as TK
 import prompt as PROMPT
 import slack as SL
 import report as RP
+import inbox as IB
 
 INTERVAL = 1800          # 30분 — 마스터 기동 base 주기(일이 있을 때)
 MAX_INTERVAL = 21600     # 6시간 — idle 백오프 상한(마스터 주기)
@@ -291,7 +292,10 @@ def monitor(root, now=None):
         if new_msgs:
             # 수신 즉시 상태요약 ack(LLM 없이, 스크립트만) — ping/pong 느낌. 실제 처리 답변은 마스터가 이어서.
             try:
-                SL.post(root, f"👀 받았어요! 지금 상태: {RP.counts_line(root)}. 확인하고 곧 정리해서 알려드릴게요 🙂")
+                # 방금 받은 건 아직 task 가 아니라 inbox 에 있다 → 미처리(inbox) 건수로 반영(방금 것 포함).
+                # task 상태 카운트는 "이미 돌고 있는 일". 분류(task/질문)는 마스터가 곧.
+                pending = len(IB.list_pending(root))
+                SL.post(root, f"👀 받았어요! 미처리 {pending}건(방금 것 포함) · 진행 {RP.counts_line(root)}. 확인하고 곧 처리해서 알려드릴게요 🙂")
             except Exception:
                 pass
     except Exception as e:
