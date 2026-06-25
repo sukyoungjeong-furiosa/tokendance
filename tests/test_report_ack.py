@@ -25,12 +25,14 @@ class AckTextTest(unittest.TestCase):
             TK.create_task(self.root, f"d{i}")
             S.update(self.root, f"d{i}", {"state": "done"})
 
+        TK.create_task(self.root, "t-q", title="캐시 추가")  # queued (title 있음 → 이름 나열)
         txt = RP.ack_text(self.root)
         self.assertIn("받았어요", txt)
         self.assertIn("미처리 2건", txt)            # inbox 2건
         self.assertIn("로그인 고쳐줘", txt)          # echo
         self.assertIn("결제 리팩터", txt)            # running 이름
         self.assertIn("DB 마이그", txt)              # needs_human 이름
+        self.assertIn("캐시 추가", txt)              # queued 도 이름으로
         self.assertIn("✅4", txt)                    # done 은 숫자만
 
     def test_cap_plus_more(self):

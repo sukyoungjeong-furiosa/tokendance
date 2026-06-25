@@ -57,10 +57,11 @@ def counts_line(root):
     return " ".join(f"{emoji}{by.get(st, 0)}" for st, emoji, _ in SECTIONS)
 
 
-# 수신 ack 에서 이름까지 나열할 "주목" 상태(소수·중요). 나머지는 숫자만.
+# 수신 ack 에서 이름까지 나열할 상태(title 이 있는 task 들). 종료 상태는 숫자만.
 _ACK_NAMED = [("running", "🟢", "진행"), ("review", "🔎", "리뷰대기"),
-              ("needs_human", "🟡", "확인필요"), ("blocked", "🔴", "막힘")]
-_ACK_COUNTED = [("queued", "⏳"), ("done", "✅"), ("failed", "⚫")]
+              ("needs_human", "🟡", "확인필요"), ("blocked", "🔴", "막힘"),
+              ("queued", "⏳", "대기")]
+_ACK_COUNTED = [("done", "✅"), ("failed", "⚫")]
 
 
 def ack_text(root, max_each=3):
