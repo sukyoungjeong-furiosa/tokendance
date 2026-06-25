@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import status as S
 import tasks as TK
 import prompt as PROMPT
+import slack as SL
 
 INTERVAL = 1800          # 30분 — 마스터 기동 base 주기(일이 있을 때)
 MAX_INTERVAL = 21600     # 6시간 — idle 백오프 상한(마스터 주기)
@@ -177,6 +178,11 @@ def monitor(root):
     """
     handle_fast_crashes(root)
     health_check(root)
+    try:
+        return SL.poll_new(root)   # 봇 토큰으로 새 DM 을 inbox 로(LLM 없이). 새 메시지 수 반환.
+    except Exception as e:
+        print(f"[supervisor] slack poll error: {e}", file=sys.stderr, flush=True)
+        return 0
 
 
 def run_master(root, claude_bin):
@@ -240,9 +246,12 @@ def main(argv=None):
     master_interval = args.interval
     while True:
         try:
-            monitor(root)
+            new_msgs = monitor(root)
         except Exception as e:  # 루프는 절대 죽지 않는다
             print(f"[supervisor] monitor error: {e}", file=sys.stderr, flush=True)
+            new_msgs = 0
+        if new_msgs:                 # 새 Slack 메시지 → 마스터를 즉시 깨운다(백오프 무시)
+            next_master = 0.0
         if time.monotonic() >= next_master:
             idle = not has_active_work(root)   # 마스터 기동 직전 판정
             try:

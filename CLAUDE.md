@@ -16,9 +16,7 @@
 - root 실행이라 claude 기동 시 `IS_SANDBOX=1` + `--dangerously-skip-permissions` 필요.
 - supervisor 기동/정지: `scripts/start.sh` / `scripts/stop.sh`.
 
-## Slack (self-DM 모드)
-- 채널 ID 는 `config.local.md` 의 `SLACK_CHANNEL` 에 둔다(인스턴스/보안 값이라 git 추적 안 함). 미설정이면 Slack 연동을 건너뛴다. 템플릿: `config.example.md`.
-- MCP는 사용자 계정으로 동작하므로 마스터가 보낸 메시지도 "사용자"로 표시된다. 따라서:
-  - **출력 마커**: 마스터가 보내는 모든 메시지는 맨 앞에 `🤖 tokendance` 로 시작한다.
-  - **자기 메시지 무시**: DM을 읽을 때 `🤖 tokendance` 로 시작하는 메시지(=마스터 자신의 출력)는 건너뛰고, 그 외 사람 메시지만 inbox로 넣는다.
-  - **중복 방지**: `state/slack.cursor` 에 마지막 처리한 메시지 ts를 저장. 읽을 때 `oldest=<cursor>` 로 그 이후만 가져온다.
+## Slack (봇 토큰 모드)
+- `config.local.md` 에 `SLACK_BOT_TOKEN`(xoxb) 과 `SLACK_CHANNEL`(상대 user id)을 둔다(git 추적 안 함; 템플릿 `config.example.md`). 둘 중 하나라도 없으면 Slack 연동을 건너뛴다.
+- **수신**: supervisor 가 60초마다 `scripts/slack.py poll` 로 봇↔사용자 DM 의 새 사람 메시지를 inbox 로 옮기고(LLM 불필요), 새 메시지가 있으면 마스터를 즉시 깨운다. cursor=`state/slack.cursor`(ts 초과분만, exclusive).
+- **발신**: `scripts/slack.py post "<텍스트>"`. 봇이 "tokendance" 정체성으로 보내므로 별도 마커 불필요. 폴링은 사람(user) 메시지만 집어 봇 자기 출력은 자동 무시.

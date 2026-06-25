@@ -6,4 +6,4 @@
 - `python3 scripts/status.py set <id> --state …` — 일감 상태의 유일한 변경 통로.
 - `python3 scripts/report.py` — 현재 상태로 리포트를 만들어 state/reports 에 기록하고 텍스트를 돌려준다.
 - `bash scripts/launch-worker.sh <id>` — 워커를 격리 worktree 에서 띄운다(보통 cycle.py 가 호출).
-- Slack 이 켜져 있으면 MCP: `slack_read_channel` / `slack_send_message`.
+- `python3 scripts/slack.py post "<텍스트>"` — Slack 봇 DM 으로 전송(켜져 있을 때만; 아니면 무해). 수신은 supervisor 가 60초마다 자동으로 inbox 에 넣어주므로 너는 pull 하지 않는다.
