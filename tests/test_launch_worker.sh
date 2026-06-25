@@ -27,6 +27,7 @@ mkdir -p "$WORK/scripts" "$WORK/prompts"
 cp "$ROOT/scripts/status.py" "$WORK/scripts/"
 cp "$ROOT/scripts/prepare-worktree.sh" "$WORK/scripts/"
 cp "$ROOT/scripts/launch-worker.sh" "$WORK/scripts/"
+cp "$ROOT/scripts/prompt.py" "$WORK/scripts/"
 echo "worker prompt" > "$WORK/prompts/worker.md"
 python3 "$WORK/scripts/status.py" --root "$WORK" init t1 --title T --repo "$REPO"
 

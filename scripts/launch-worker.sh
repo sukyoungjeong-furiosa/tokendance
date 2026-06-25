@@ -29,7 +29,7 @@ fi
 #    신호(supervisor.detect_fast_crash)로 신뢰성 있게 쓰인다. (PROMPT/sysprompt 는 위치인자로 넘겨
 #    재평가/쿼팅 문제를 피한다.)
 PROMPT="너는 tokendance 워커다. task id=${TASK_ID}. ${ROOT}/prompts/worker.md 를 읽고 그대로 따르라. 일감 명세: ${TASK_DIR}/task.md"
-SYSPROMPT="$(cat "$ROOT/prompts/worker.md")"
+SYSPROMPT="$(python3 "$ROOT/scripts/prompt.py" build worker)"
 PIDFILE="$ROOT/state/workers/$TASK_ID.pid"
 rm -f "$PIDFILE"   # 이전 (재)기동의 잔여 pidfile 제거
 cd "$WORKTREE"

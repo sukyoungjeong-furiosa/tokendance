@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import status as S
 import tasks as TK
+import prompt as PROMPT
 
 INTERVAL = 1800          # 30분 — 마스터 기동 base 주기(일이 있을 때)
 MAX_INTERVAL = 21600     # 6시간 — idle 백오프 상한(마스터 주기)
@@ -179,14 +180,12 @@ def monitor(root):
 
 
 def run_master(root, claude_bin):
-    master_md = os.path.join(root, "prompts", "master.md")
-    prompt = (f"너는 tokendance 마스터다. {root}/CLAUDE.md 와 {master_md} 를 읽고 "
-              f"정확히 한 번의 관리 사이클을 수행한 뒤 종료하라.")
-    with open(master_md) as f:
-        sysprompt = f.read()
+    user_prompt = ("너는 tokendance 마스터다. 시스템 프롬프트의 지침대로 "
+                   "정확히 한 번의 관리 사이클을 수행한 뒤 종료하라.")
+    sysprompt = PROMPT.build(root, "master")   # prompts/master/*.md 조립
     env = {**os.environ, "IS_SANDBOX": "1"}  # root 에서 자율 권한 허용에 필수
     return subprocess.run(
-        [claude_bin, "-p", prompt,
+        [claude_bin, "-p", user_prompt,
          "--append-system-prompt", sysprompt,
          "--dangerously-skip-permissions"],
         cwd=root, env=env)
