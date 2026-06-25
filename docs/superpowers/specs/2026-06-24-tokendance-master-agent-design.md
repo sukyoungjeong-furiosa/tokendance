@@ -30,7 +30,7 @@
 
 **해결**: 워커를 하네스의 서브에이전트가 아니라, 코드(`claude` 네이티브 바이너리)를 직접 실행해 만든 **독립 OS 프로세스**로 띄운다. `setsid`/`nohup`으로 부모에서 떼어내면, 띄운 마스터 프로세스가 죽어도 워커는 호스트 위에서 계속 산다. 이로써 하네스 세션 수명 한계를 완전히 우회한다.
 
-이 모델은 상시 켜진 호스트를 전제로 한다. 대상 호스트(`sukyoungjeong-0`)는 업타임 6주+의 상시 서버이며, 네이티브 `claude` 바이너리·API 키·`setsid`/`nohup`이 모두 확인됨 (부록 A).
+이 모델은 상시 켜진 호스트를 전제로 한다. 대상 호스트는 업타임 6주+의 상시 서버이며, 네이티브 `claude` 바이너리·API 키·`setsid`/`nohup`이 모두 확인됨 (부록 A).
 
 ### 3.2 통신은 전부 파일 (단일 진실원)
 에이전트 핸들/세션 ID는 세션·프로세스 경계를 넘지 못한다. 따라서 마스터↔워커, 깨어남↔깨어남, 사람↔시스템의 모든 소통은 **tokendance 레포 안의 파일**을 통한다. 연속성은 "살아있는 프로세스"가 아니라 "상태 파일"에 산다. 모든 상태가 git에 남아 추적/롤백 가능하다.
@@ -41,7 +41,7 @@
 ## 4. 아키텍처
 
 ```
-sukyoungjeong-0 (상시 호스트)
+host (상시 호스트)
 │
 └─ supervisor.py  (nohup으로 띄운 유일한 상주 프로세스)
       │  30분마다:
@@ -255,7 +255,7 @@ tokendance/
 - Slack MCP가 headless(비대화형) 실행 컨텍스트에서도 접근 가능한지 확인 (대화형 인증 의존 가능성).
 
 ## 부록 A — 검증된 호스트 사실 (2026-06-24)
-- 호스트 `sukyoungjeong-0`, 업타임 6주+ (상시형).
+- 상시 호스트, 업타임 6주+ (상시형).
 - 네이티브 `claude` 바이너리 존재: `~/.vscode-server/extensions/anthropic.claude-code-2.1.187-linux-x64/resources/native-binary/claude` (node 불필요). 지원 플래그: `-p/--print`, `--append-system-prompt`, `--agents`, `--dangerously-skip-permissions`, `--resume`/`--continue`, `--output-format stream-json`, `--bg`, `--model`, `--effort`.
 - `nohup`, `setsid` 존재. `ANTHROPIC_API_KEY` 세팅됨 + `~/.claude/.credentials.json` 존재.
 - 부재: PATH상의 `claude`/`node`, `crontab`, `systemctl` → 주기성은 nohup supervisor 루프가 담당.

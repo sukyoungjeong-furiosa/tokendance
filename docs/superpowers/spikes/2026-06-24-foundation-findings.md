@@ -3,7 +3,7 @@
 플랜 Task 1. 아키텍처 전제 3가지를 실제 실행으로 검증.
 
 ## 환경
-- 호스트 `sukyoungjeong-0`, **root(uid=0)로 실행**, 업타임 6주+.
+- 상시 호스트, **root(uid=0)로 실행**, 업타임 6주+.
 - claude 바이너리(고정):
   ```bash
   export TOKENDANCE_CLAUDE="$(ls -dt /root/.vscode-server/extensions/anthropic.claude-code-*/resources/native-binary/claude | head -1)"
