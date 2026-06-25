@@ -11,8 +11,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import status as S
 import tasks as TK
 
-INTERVAL = 1800       # 30분 (틱 주기)
-STALE_SECONDS = 1200  # 20분 — heartbeat 이보다 오래되면 죽은 워커로 간주
+INTERVAL = 1800         # 30분 (base 틱 주기 — 일이 있을 때 깨어나는 간격)
+MAX_INTERVAL = 21600    # 6시간 — idle 백오프 상한
+BACKOFF_FACTOR = 2      # idle 틱이 연속될 때 다음 sleep 을 늘리는 배수
+STALE_SECONDS = 1200    # 20분 — heartbeat 이보다 오래되면 죽은 워커로 간주
+
+# 마스터가 이번 틱에 실제로 행동할 수 있는 일감 상태.
+# needs_human/blocked 는 사람/외부 대기라 폴링 주기를 짧게 유지할 이유가 아니다 → idle 로 본다.
+ACTIVE_STATES = ("queued", "running", "review")
 
 
 def _parse_iso(s):
@@ -57,6 +63,23 @@ def tick(root, claude_bin):
     run_master(root, claude_bin)
 
 
+def has_active_work(root):
+    """이번 틱에 마스터가 처리할 일감이 있는가(= idle 이 아닌가)."""
+    return any(TK.list_tasks(root, state=s) for s in ACTIVE_STATES)
+
+
+def next_interval(prev_interval, idle, base=INTERVAL,
+                  max_interval=MAX_INTERVAL, factor=BACKOFF_FACTOR):
+    """다음 sleep 간격(초)을 계산하는 순수 함수(부작용 없음).
+
+    - idle=False(이번 틱에 처리할 일이 있었음): base 로 즉시 복귀(백오프 리셋).
+    - idle=True: 직전 간격을 factor 배로 늘리되 max_interval 로 클램프.
+    """
+    if not idle:
+        return base
+    return min(prev_interval * factor, max_interval)
+
+
 def _default_root():
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -64,19 +87,30 @@ def _default_root():
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--once", action="store_true")
-    ap.add_argument("--interval", type=int, default=INTERVAL)
+    ap.add_argument("--interval", type=int, default=INTERVAL,
+                    help="base 틱 주기(초). 일이 있을 때 깨어나는 간격이자 백오프 리셋 값.")
+    ap.add_argument("--max-interval", type=int, default=MAX_INTERVAL,
+                    help="idle 백오프 sleep 상한(초).")
+    ap.add_argument("--backoff-factor", type=float, default=BACKOFF_FACTOR,
+                    help="idle 틱이 연속될 때 다음 sleep 을 늘리는 배수.")
     args = ap.parse_args(argv)
     root = _default_root()
     claude_bin = os.environ["TOKENDANCE_CLAUDE"]
     if args.once:
         tick(root, claude_bin)
         return
+    interval = args.interval
     while True:
+        # idle 판정은 tick 직전에: 이번 사이클에 마스터가 처리할 일이 있었나.
+        idle = not has_active_work(root)
         try:
             tick(root, claude_bin)
         except Exception as e:  # 루프는 절대 죽지 않는다
             print(f"[supervisor] tick error: {e}", file=sys.stderr)
-        time.sleep(args.interval)
+        interval = next_interval(interval, idle, base=args.interval,
+                                 max_interval=args.max_interval,
+                                 factor=args.backoff_factor)
+        time.sleep(interval)
 
 
 if __name__ == "__main__":
