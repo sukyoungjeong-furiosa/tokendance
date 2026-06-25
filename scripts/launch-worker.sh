@@ -84,10 +84,15 @@ fi
 #    같은 pid 를 물려받게 한다 → status 의 worker_pid 가 진짜 워커 pid 가 되어 즉사 감지의 보조
 #    신호(supervisor.detect_fast_crash)로 신뢰성 있게 쓰인다. (PROMPT/sysprompt 는 위치인자로 넘겨
 #    재평가/쿼팅 문제를 피한다.)
+# tokendance ROOT 절대경로를 워커에 전달(완료기준 #1): 워커 cwd 는 타겟 레포 worktree 라
+# 상대경로 `scripts/`·`state/` 가 비-tokendance 레포에선 존재하지 않는다. 환경변수로 상속시키고
+# (env 가 어떤 이유로 비어도) PROMPT 에도 병기해 이중화한다. checkpoint.py/finish.py 등은
+# 스크립트 파일 위치로 root 를 잡으므로 절대경로 호출이면 cwd 와 무관하게 정상 동작한다.
+export TOKENDANCE_ROOT="$ROOT"
 if [ "$RESUMING" -eq 1 ]; then
-  PROMPT="이어서 진행하라. 너는 tokendance 워커이고 task id=${TASK_ID} 다. 직전 세션을 이어받았다. ${TASK_DIR}/steer.md 의 새 피드백과 progress.md 를 먼저 확인하고 남은 일을 계속하라. 규칙은 ${ROOT}/prompts/worker.md."
+  PROMPT="이어서 진행하라. 너는 tokendance 워커이고 task id=${TASK_ID} 다. 직전 세션을 이어받았다. tokendance ROOT(절대경로)=${ROOT} (환경변수 TOKENDANCE_ROOT 에도 있음). cwd 는 타겟 레포 worktree 다. ${TASK_DIR}/steer.md 의 새 피드백과 ${TASK_DIR}/progress.md 를 먼저 확인하고 남은 일을 계속하라. 규칙은 ${ROOT}/prompts/worker.md."
 else
-  PROMPT="너는 tokendance 워커다. task id=${TASK_ID}. ${ROOT}/prompts/worker.md 를 읽고 그대로 따르라. 일감 명세: ${TASK_DIR}/task.md"
+  PROMPT="너는 tokendance 워커다. task id=${TASK_ID}. tokendance ROOT(절대경로)=${ROOT} (환경변수 TOKENDANCE_ROOT 에도 있음). cwd 는 타겟 레포 worktree 다. ${ROOT}/prompts/worker.md 를 읽고 그대로 따르라. 일감 명세: ${TASK_DIR}/task.md"
 fi
 SYSPROMPT="$(python3 "$ROOT/scripts/prompt.py" build worker)"
 PIDFILE="$ROOT/state/workers/$TASK_ID.pid"
