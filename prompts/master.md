@@ -34,7 +34,7 @@
    - 반려 → `steer.md` 에 교정 블록 append + `python3 scripts/status.py set <id> --state queued --bump-attempts`.
    - **worktree 회수**: 일감이 종료(done/failed)되면 격리 worktree 를 회수한다(브랜치는 PR 머지·검토 후에만 삭제). 경로는 `state/tasks/<id>/worktree.path`:
      `WT=$(cat state/tasks/<id>/worktree.path); REPO=$(python3 scripts/status.py get <id> --field repo); git -C "$REPO" worktree remove --force "$WT"; git -C "$REPO" worktree prune`
-4. **지식 수확.** 워커가 log.md 에 남긴 "## 지식:" 블록 중 재사용 가치가 있는 것을 `library/playbooks/` 또는 `library/repos/<repo>.md` 로 승격하고 `library/index.md` 에 링크를 추가한다.
+4. **지식 수확.** `python3 scripts/harvest_knowledge.py` 를 실행한다. 이 도구가 모든 워커 log.md 의 "## 지식:" 블록을 파싱→분류(playbook vs repos/<repo>)→`library/` 로 승격하고 `library/index.md` 까지 자동 갱신한다(멱등 — ledger `library/.harvest-ledger.json` 가 처리 표식). 출력의 `created/updated` 항목을 훑어 승격 결과를 확인한다. library 파일은 ledger 의 투영이라 손으로 편집하지 말 것(블록 형식은 `prompts/worker.md` 의 "지식 블록 형식" 참조).
 5. **리포트.** `state/reports/<오늘날짜>.md` 에 append (없으면 생성):
    - 🟢 순항(running): 일감 + progress.md 한 줄 요약
    - 🟡 판단 필요(needs_human): "X 애매 → 일단 Y, 맞나요?" — 사람 답을 유도
