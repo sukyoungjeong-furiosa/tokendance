@@ -7,12 +7,9 @@ mkdir -p "$ROOT/state"
 if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
   echo "이미 실행 중: $(cat "$PIDFILE")"; exit 0
 fi
-# config.local.md 의 POLL_INTERVAL(초)이 있으면 supervisor 주기로 전달(없으면 기본 1800).
-INTERVAL_ARG=""
-if [ -f "$ROOT/config.local.md" ]; then
-  VAL="$(grep -oE '^POLL_INTERVAL=[0-9]+' "$ROOT/config.local.md" | head -1 | cut -d= -f2)"
-  [ -n "$VAL" ] && INTERVAL_ARG="--interval $VAL"
-fi
-nohup python3 "$ROOT/scripts/supervisor.py" $INTERVAL_ARG >"$ROOT/state/supervisor.log" 2>&1 < /dev/null &
+# keepalive 래퍼(supervise.sh)를 새 세션/프로세스그룹으로 기동 → supervisor.py 가 죽으면 자동 재기동.
+# PIDFILE 에는 래퍼 pid(=프로세스그룹 리더)를 적는다. stop.sh 가 그룹째 종료한다.
+# (POLL_INTERVAL 해석/로그 리다이렉트는 supervise.sh 안에서 처리.)
+setsid nohup bash "$ROOT/scripts/supervise.sh" >/dev/null 2>&1 < /dev/null &
 echo $! > "$PIDFILE"
-echo "supervisor 시작: $(cat "$PIDFILE")"
+echo "supervisor 시작(keepalive): $(cat "$PIDFILE")"

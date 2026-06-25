@@ -5,3 +5,4 @@ bash tests/test_prepare_worktree.sh
 bash tests/test_launch_worker.sh
 bash tests/test_launch_worker_resume.sh
 bash tests/test_run_checks.sh
+bash tests/test_supervise.sh

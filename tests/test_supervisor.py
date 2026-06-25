@@ -1,4 +1,4 @@
-import os, sys, tempfile, unittest
+import json, os, sys, tempfile, unittest
 from datetime import datetime, timezone, timedelta
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 import supervisor as SV
@@ -334,6 +334,185 @@ class HandleFastCrashesTest(unittest.TestCase):
             self.root, now=self.now, pid_alive=_alive,  # pid 살아있어도 로그로 감지
             relaunch=lambda root, tid: True, log=lambda m: None)
         self.assertEqual(acted, [("t1", "retry")])
+
+
+class AliveWorkersTest(unittest.TestCase):
+    """alive_workers: running 이면서 heartbeat 가 신선한 워커 수(관측 메트릭)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = self.tmp.name
+        self.now = datetime.now(timezone.utc)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _worker(self, tid, state, hb_delta=None):
+        TK.create_task(self.root, tid)
+        changes = {"state": state}
+        if hb_delta is not None:
+            changes["heartbeat"] = _iso(self.now - timedelta(seconds=hb_delta))
+        S.update(self.root, tid, changes)
+
+    def test_no_workers_is_zero(self):
+        self.assertEqual(SV.alive_workers(self.root, now=self.now), 0)
+
+    def test_fresh_running_counts(self):
+        self._worker("t1", "running", hb_delta=10)
+        self.assertEqual(SV.alive_workers(self.root, now=self.now), 1)
+
+    def test_stale_running_not_counted(self):
+        self._worker("t1", "running", hb_delta=3000)
+        self.assertEqual(SV.alive_workers(self.root, now=self.now), 0)
+
+    def test_running_without_heartbeat_not_counted(self):
+        self._worker("t1", "running", hb_delta=None)
+        self.assertEqual(SV.alive_workers(self.root, now=self.now), 0)
+
+    def test_non_running_ignored(self):
+        self._worker("t1", "review", hb_delta=10)
+        self._worker("t2", "done", hb_delta=10)
+        self.assertEqual(SV.alive_workers(self.root, now=self.now), 0)
+
+
+class BuildTransitionsTest(unittest.TestCase):
+    """_build_transitions: fast-crash acted + health_check dead 를 구조화 transition 으로."""
+
+    def test_combines_fast_crash_and_health_check(self):
+        ts = SV._build_transitions(dead=["t3"], acted=[("t1", "retry"), ("t2", "needs_human")])
+        self.assertIn({"task": "t1", "action": "retry", "by": "fast_crash"}, ts)
+        self.assertIn({"task": "t2", "action": "needs_human", "by": "fast_crash"}, ts)
+        self.assertIn(
+            {"task": "t3", "action": "needs_human", "by": "health_check",
+             "reason": "stale_heartbeat"}, ts)
+
+    def test_empty_is_empty(self):
+        self.assertEqual(SV._build_transitions([], []), [])
+
+
+class MonitorTickTest(unittest.TestCase):
+    """monitor: 구조화 tick 레코드 반환(관측성 criteria #3)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = self.tmp.name
+        self.now = datetime.now(timezone.utc)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_returns_required_keys(self):
+        tick = SV.monitor(self.root, now=self.now)
+        for k in ("ts", "running_checked", "alive_workers", "transitions", "new_slack_msgs"):
+            self.assertIn(k, tick)
+
+    def test_healthy_worker_no_transition(self):
+        TK.create_task(self.root, "t1")
+        S.update(self.root, "t1", {"state": "running", "heartbeat": _iso(self.now)})
+        tick = SV.monitor(self.root, now=self.now)
+        self.assertEqual(tick["running_checked"], 1)
+        self.assertEqual(tick["alive_workers"], 1)
+        self.assertEqual(tick["transitions"], [])
+
+    def test_legacy_stale_worker_recorded_as_transition(self):
+        # launched_at 없는 stale running → health_check 가 needs_human (fast-crash 비대상).
+        TK.create_task(self.root, "t1")
+        S.update(self.root, "t1",
+                 {"state": "running", "heartbeat": _iso(self.now - timedelta(seconds=3000))})
+        tick = SV.monitor(self.root, now=self.now)
+        self.assertEqual(tick["running_checked"], 1)
+        self.assertEqual(tick["alive_workers"], 0)
+        self.assertEqual(
+            tick["transitions"],
+            [{"task": "t1", "action": "needs_human", "by": "health_check",
+              "reason": "stale_heartbeat"}])
+        self.assertEqual(S.read(self.root, "t1")["state"], "needs_human")
+
+
+class RecordTickTest(unittest.TestCase):
+    """record_tick / read_metrics: jsonl append + metrics 스냅샷(criteria #3,#4)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = self.tmp.name
+        os.makedirs(os.path.join(self.root, "state"))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _tick(self, ts, alive=1, running=1, transitions=None):
+        return {"ts": ts, "running_checked": running, "alive_workers": alive,
+                "transitions": transitions or [], "new_slack_msgs": 0}
+
+    def test_appends_jsonl_and_writes_metrics(self):
+        rs = {"pid": 4242, "started_at": "2026-06-25T00:00:00Z", "ticks_total": 0}
+        SV.record_tick(self.root, self._tick("2026-06-25T00:01:00Z"), rs)
+        jsonl = os.path.join(self.root, "state", "supervisor.ticks.jsonl")
+        with open(jsonl) as f:
+            lines = f.read().splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(json.loads(lines[0])["ts"], "2026-06-25T00:01:00Z")
+        m = SV.read_metrics(self.root)
+        self.assertEqual(m["supervisor_pid"], 4242)
+        self.assertEqual(m["ticks_total"], 1)
+        self.assertEqual(m["last_tick_at"], "2026-06-25T00:01:00Z")
+        self.assertEqual(m["alive_workers"], 1)
+
+    def test_multiple_ticks_accumulate(self):
+        rs = {"pid": 4242, "started_at": "2026-06-25T00:00:00Z", "ticks_total": 0}
+        SV.record_tick(self.root, self._tick("2026-06-25T00:01:00Z"), rs)
+        SV.record_tick(self.root, self._tick("2026-06-25T00:02:00Z", alive=2), rs)
+        jsonl = os.path.join(self.root, "state", "supervisor.ticks.jsonl")
+        with open(jsonl) as f:
+            self.assertEqual(len(f.read().splitlines()), 2)
+        m = SV.read_metrics(self.root)
+        self.assertEqual(m["ticks_total"], 2)
+        self.assertEqual(m["last_tick_at"], "2026-06-25T00:02:00Z")
+        self.assertEqual(m["alive_workers"], 2)
+
+    def test_read_metrics_absent_is_none(self):
+        self.assertIsNone(SV.read_metrics(self.root))
+
+
+class StartupReabsorbTest(unittest.TestCase):
+    """startup_reabsorb: 재기동 시 상태 재흡수 관측 + 중복/오판 없음(criteria #2)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = self.tmp.name
+        os.makedirs(os.path.join(self.root, "state"))
+        self.now = datetime.now(timezone.utc)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_logs_running_count_and_returns_them(self):
+        TK.create_task(self.root, "t1")
+        S.update(self.root, "t1", {"state": "running", "heartbeat": _iso(self.now)})
+        logs = []
+        running = SV.startup_reabsorb(self.root, now=self.now, log=logs.append)
+        self.assertEqual([d["id"] for d in running], ["t1"])
+        self.assertTrue(any("t1" in m or "running=1" in m for m in logs))
+
+    def test_no_prev_metrics_does_not_crash(self):
+        logs = []
+        self.assertEqual(SV.startup_reabsorb(self.root, now=self.now, log=logs.append), [])
+
+    def test_restart_handles_stale_worker_exactly_once(self):
+        # 크래시 동안 stale 된 running 워커가 재기동 후 첫 tick 에 정확히 1회만 needs_human 으로.
+        TK.create_task(self.root, "t1")
+        S.update(self.root, "t1",
+                 {"state": "running", "heartbeat": _iso(self.now - timedelta(seconds=3000))})
+        SV.startup_reabsorb(self.root, now=self.now, log=lambda m: None)
+        rs = {"pid": 1, "started_at": _iso(self.now), "ticks_total": 0}
+        tick1 = SV.monitor(self.root, now=self.now)
+        SV.record_tick(self.root, tick1, rs)
+        self.assertEqual(len(tick1["transitions"]), 1)
+        self.assertEqual(S.read(self.root, "t1")["state"], "needs_human")
+        # 두 번째 tick: 이미 needs_human 이라 더는 transition 없음(중복 감시/오판 없음).
+        tick2 = SV.monitor(self.root, now=self.now)
+        self.assertEqual(tick2["transitions"], [])
+        self.assertEqual(tick2["running_checked"], 0)
 
 
 if __name__ == "__main__":
