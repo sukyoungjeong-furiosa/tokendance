@@ -292,10 +292,9 @@ def monitor(root, now=None):
         if new_msgs:
             # 수신 즉시 상태요약 ack(LLM 없이, 스크립트만) — ping/pong 느낌. 실제 처리 답변은 마스터가 이어서.
             try:
-                # 방금 받은 건 아직 task 가 아니라 inbox 에 있다 → 미처리(inbox) 건수로 반영(방금 것 포함).
-                # task 상태 카운트는 "이미 돌고 있는 일". 분류(task/질문)는 마스터가 곧.
-                pending = len(IB.list_pending(root))
-                SL.post(root, f"👀 받았어요! 미처리 {pending}건(방금 것 포함) · 진행 {RP.counts_line(root)}. 확인하고 곧 처리해서 알려드릴게요 🙂")
+                # 방금 받은 건 아직 task 가 아니라 inbox 에 있다 → 미처리(inbox)로 미리보기 echo.
+                # 진행 중 작업은 이름으로 나열(각 3개 캡), 대량 상태는 숫자만. 분류는 마스터가 곧.
+                SL.post(root, RP.ack_text(root))
             except Exception:
                 pass
     except Exception as e:

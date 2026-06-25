@@ -57,6 +57,47 @@ def counts_line(root):
     return " ".join(f"{emoji}{by.get(st, 0)}" for st, emoji, _ in SECTIONS)
 
 
+# 수신 ack 에서 이름까지 나열할 "주목" 상태(소수·중요). 나머지는 숫자만.
+_ACK_NAMED = [("running", "🟢", "진행"), ("review", "🔎", "리뷰대기"),
+              ("needs_human", "🟡", "확인필요"), ("blocked", "🔴", "막힘")]
+_ACK_COUNTED = [("queued", "⏳"), ("done", "✅"), ("failed", "⚫")]
+
+
+def ack_text(root, max_each=3):
+    """수신 즉시 보내는 상태 요약(LLM 없이). 방금 받은 건 inbox 미처리로, 진행 중 작업은 이름으로 나열.
+
+    각 상태 max_each 개까지만 이름을 적고 나머지는 '+N'. 대량 상태는 숫자만 → 길이 bounded.
+    """
+    import inbox as IB
+    lines = ["👀 받았어요!"]
+    pend = IB.list_pending(root)
+    if pend:
+        echoes = []
+        for n in pend[:max_each]:
+            try:
+                first = (IB.read_pending(root, n).strip().splitlines() or [""])[0]
+            except OSError:
+                first = "?"
+            echoes.append(f"“{first[:24]}”")
+        more = f" +{len(pend) - max_each}건 더" if len(pend) > max_each else ""
+        lines.append(f"• 미처리 {len(pend)}건(곧 분류): {', '.join(echoes)}{more}")
+
+    by = {}
+    for d in TK.list_tasks(root):
+        by.setdefault(d.get("state"), []).append(d)
+    for st, emoji, label in _ACK_NAMED:
+        items = by.get(st, [])
+        if not items:
+            continue
+        names = [(d.get("title") or d["id"])[:28] for d in items[:max_each]]
+        more = f" +{len(items) - max_each}" if len(items) > max_each else ""
+        lines.append(f"• {emoji} {label} {len(items)}: {', '.join(names)}{more}")
+
+    tail = " · ".join(f"{emoji}{len(by.get(st, []))}" for st, emoji in _ACK_COUNTED)
+    lines.append(f"({tail}) — 확인하고 곧 처리해서 알려드릴게요 🙂")
+    return "\n".join(lines)
+
+
 def build_report(root, now=None):
     tasks = TK.list_tasks(root)
     by = {}
