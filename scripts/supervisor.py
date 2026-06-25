@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """상주 루프: 짧은 주기로 워커 헬스/즉사를 감시하고, 30분마다 headless 마스터를 1회 기동."""
 import argparse
+import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 
@@ -19,6 +21,11 @@ MAX_INTERVAL = 21600     # 6시간 — idle 백오프 상한(마스터 주기)
 BACKOFF_FACTOR = 2       # idle 마스터 틱이 연속될 때 다음 주기를 늘리는 배수
 MONITOR_INTERVAL = 60    # 60초 — 헬스/즉사 감시 주기(마스터보다 훨씬 자주)
 STALE_SECONDS = 1200     # 20분 — heartbeat 이보다 오래되면 죽은 워커로 간주(느린 주 판정)
+
+# ── ticks.jsonl 회전 파라미터 ──
+# ticks.jsonl 은 tick 당 한 줄(≈280KB/day) 무한 증가하므로 size 기준으로 회전한다.
+# 임계 초과 시 ticks.jsonl → ticks.jsonl.1(직전 백업 1개만, 덮어씀) → 디스크는 최대 ≈2×임계로 bounded.
+MAX_TICKS_BYTES = 5 * 1024 * 1024   # 5MB(≈18일치). 초과하면 .1 로 회전
 
 # ── 즉사(fast-crash) 감지 파라미터 ──
 GRACE_SECONDS = 180      # launch 후 이 시간 안에는 즉사로 판정하지 않는다(갓 띄운 워커 오판 방지)
@@ -44,9 +51,41 @@ def _parse_iso(s):
     return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
 
 
+def _iso(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _log(msg):
-    # tick 로그(start.sh 가 state/supervisor.log 로 리다이렉트). 판정/재시도 관측 가능성(criteria #4).
+    # 사람용 텍스트 로그(start.sh 가 state/supervisor.log 로 리다이렉트). master stdout 과 섞인다.
+    # 기계 판독용 구조화 관측은 _ticks_path/_metrics_path(별도 파일)를 쓴다(criteria #3,#4).
     print(f"[supervisor] {msg}", file=sys.stderr, flush=True)
+
+
+def _ticks_path(root):
+    # tick 당 JSON 1줄(append-only). 구조화 관측 — 타임스탬프/검사 워커 수/상태 전이.
+    return os.path.join(root, "state", "supervisor.ticks.jsonl")
+
+
+def _metrics_path(root):
+    # 매 tick 덮어쓰는 bounded 요약 스냅샷(마스터/사람 조회 경로).
+    return os.path.join(root, "state", "supervisor.metrics.json")
+
+
+def _atomic_write_json(path, data):
+    """status.py 와 동일한 tmp+fsync+rename 패턴. status.json 은 아니므로 직접 써도 규칙 위배 아님."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".sv.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
 
 
 def health_check(root, now=None, stale_seconds=STALE_SECONDS, max_attempts=MAX_ATTEMPTS,
@@ -94,6 +133,22 @@ def health_check(root, now=None, stale_seconds=STALE_SECONDS, max_attempts=MAX_A
         log(f"stale {tid}: heartbeat 정지 → needs_human ({reason})")
         dead.append(tid)
     return dead
+
+
+def alive_workers(root, now=None, stale_seconds=STALE_SECONDS):
+    """running 이면서 heartbeat 가 신선한 워커 수(관측 메트릭 criteria #4).
+
+    health_check 의 역(stale 가 아닌 running). 갓 재기동된 워커는 launch-worker.sh 가
+    즉시 heartbeat 를 찍으므로 신선으로 잡힌다.
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    n = 0
+    for d in TK.list_tasks(root, state="running"):
+        hb = d.get("heartbeat")
+        if hb is not None and (now - _parse_iso(hb)).total_seconds() <= stale_seconds:
+            n += 1
+    return n
 
 
 def _pid_alive(pid):
@@ -205,19 +260,106 @@ def handle_fast_crashes(root, now=None, grace=GRACE_SECONDS, max_attempts=MAX_AT
     return acted
 
 
-def monitor(root):
+def _build_transitions(dead, acted):
+    """health_check(dead) + handle_fast_crashes(acted) 결과를 구조화 transition 리스트로."""
+    out = []
+    for tid, action in acted:
+        out.append({"task": tid, "action": action, "by": "fast_crash"})
+    for tid in dead:
+        out.append({"task": tid, "action": "needs_human", "by": "health_check",
+                    "reason": "stale_heartbeat"})
+    return out
+
+
+def monitor(root, now=None):
     """짧은 주기로 도는 경량 감시: 즉사 빠른 감지/재시도 + heartbeat staleness 판정.
 
     즉사 처리(handle_fast_crashes)를 먼저 한다 → transient 크래시는 staleness 로 needs_human 되기
     전에 자동 재시도되어야 하므로(특히 supervisor 가 한동안 멈췄다 재기동된 경우).
+
+    반환: 이 tick 의 구조화 레코드(관측성 criteria #3). 호출측이 record_tick 으로 영속화.
     """
-    handle_fast_crashes(root)
-    health_check(root)
+    if now is None:
+        now = datetime.now(timezone.utc)
+    running_checked = len(TK.list_tasks(root, state="running"))   # 이번 틱에 검사한 워커 수
+    acted = handle_fast_crashes(root, now=now)
+    dead = health_check(root, now=now)
     try:
-        return SL.poll_new(root)   # 봇 토큰으로 새 DM 을 inbox 로(LLM 없이). 새 메시지 수 반환.
+        new_msgs = SL.poll_new(root)   # 봇 토큰으로 새 DM 을 inbox 로(LLM 없이). 새 메시지 수.
     except Exception as e:
         print(f"[supervisor] slack poll error: {e}", file=sys.stderr, flush=True)
-        return 0
+        new_msgs = 0
+    return {
+        "ts": _iso(now),
+        "running_checked": running_checked,
+        "alive_workers": alive_workers(root, now=now),   # transition 적용 후 신선 running 수
+        "transitions": _build_transitions(dead, acted),
+        "new_slack_msgs": new_msgs,
+    }
+
+
+def _rotate_ticks(p, max_bytes=MAX_TICKS_BYTES):
+    """ticks.jsonl 이 max_bytes 이상이면 p → p.1 로 회전(직전 백업 1개만 보관, 덮어씀).
+
+    append 직전에 호출 → 파일이 임계를 넘은 채로 무한 증가하지 않는다. 백업 1개라 디스크는
+    최대 ≈2×max_bytes 로 bounded. 파일이 없으면(첫 tick) no-op.
+    """
+    try:
+        if os.path.getsize(p) >= max_bytes:
+            os.replace(p, p + ".1")
+    except FileNotFoundError:
+        pass
+
+
+def record_tick(root, tick, run_state):
+    """tick 레코드를 ticks.jsonl 에 append + metrics.json 스냅샷 덮어쓰기(criteria #3,#4).
+
+    run_state: {"pid", "started_at", "ticks_total"} — 호출측이 보유하는 supervisor 가동 상태.
+    ticks_total 을 증가시키는 쪽이라 호출측 dict 를 in-place 갱신한다.
+    """
+    run_state["ticks_total"] = run_state.get("ticks_total", 0) + 1
+    p = _ticks_path(root)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    _rotate_ticks(p, MAX_TICKS_BYTES)   # 전역을 call-time 에 읽어 회전(테스트가 임계를 낮춰 검증)
+    with open(p, "a") as f:
+        f.write(json.dumps(tick, ensure_ascii=False) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+    _atomic_write_json(_metrics_path(root), {
+        "last_tick_at": tick["ts"],
+        "alive_workers": tick["alive_workers"],
+        "running_workers": tick["running_checked"],
+        "supervisor_pid": run_state.get("pid"),
+        "started_at": run_state.get("started_at"),
+        "ticks_total": run_state["ticks_total"],
+        "last_transitions": tick["transitions"],
+        "new_slack_msgs": tick["new_slack_msgs"],
+    })
+
+
+def read_metrics(root):
+    """metrics.json 을 읽어 dict 반환(없으면 None). 마스터/사람 조회 경로."""
+    try:
+        with open(_metrics_path(root)) as f:
+            return json.load(f)
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+def startup_reabsorb(root, now=None, log=_log):
+    """(재)기동 시 상태 재흡수 관측(criteria #2).
+
+    실제 재흡수는 monitor 가 매 tick status.json 을 디스크에서 새로 읽어 무상태로 처리하므로
+    별도 동기화가 필요 없다. 여기서는 재기동을 가시화하기 위해 진행 중 워커 수와 직전 tick 시각을
+    로깅하고 running 목록을 돌려준다(중복 감시/오판 없음을 검증 가능하게).
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    running = TK.list_tasks(root, state="running")
+    prev = read_metrics(root)
+    last_tick = prev.get("last_tick_at") if prev else None
+    log(f"startup: 상태 재흡수 running={len(running)} prev_tick={last_tick or 'none'}")
+    return running
 
 
 def run_master(root, claude_bin):
@@ -232,8 +374,12 @@ def run_master(root, claude_bin):
         cwd=root, env=env)
 
 
-def tick(root, claude_bin):
-    monitor(root)
+def tick(root, claude_bin, run_state=None):
+    if run_state is None:
+        run_state = {"pid": os.getpid(), "started_at": _iso(datetime.now(timezone.utc)),
+                     "ticks_total": 0}
+    rec = monitor(root)
+    record_tick(root, rec, run_state)
     run_master(root, claude_bin)
 
 
@@ -258,8 +404,29 @@ def _default_root():
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def print_metrics(root):
+    """metrics.json 요약을 사람이 읽기 좋게 출력(조회 경로 criteria #4)."""
+    m = read_metrics(root)
+    if not m:
+        print("supervisor metrics: 아직 없음(supervisor 가 한 번도 tick 하지 않음)")
+        return
+    print(f"supervisor metrics ({_metrics_path(root)}):")
+    print(f"  last_tick_at   : {m.get('last_tick_at')}")
+    print(f"  alive_workers  : {m.get('alive_workers')}")
+    print(f"  running_workers: {m.get('running_workers')}")
+    print(f"  supervisor_pid : {m.get('supervisor_pid')}")
+    print(f"  started_at     : {m.get('started_at')}")
+    print(f"  ticks_total    : {m.get('ticks_total')}")
+    tr = m.get("last_transitions") or []
+    print(f"  last_transitions: {len(tr)}")
+    for t in tr:
+        print(f"    - {t.get('task')} → {t.get('action')} (by {t.get('by')})")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
+    ap.add_argument("mode", nargs="?", choices=["run", "metrics"], default="run",
+                    help="run(기본, 상주 루프) | metrics(현재 메트릭 요약 출력 후 종료)")
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--interval", type=int, default=INTERVAL,
                     help="마스터 기동 base 주기(초). 일이 있을 때 간격이자 idle 백오프 리셋 값.")
@@ -271,17 +438,25 @@ def main(argv=None):
                     help="헬스/즉사 감시 주기(초). 마스터보다 훨씬 자주.")
     args = ap.parse_args(argv)
     root = _default_root()
-    claude_bin = os.environ["TOKENDANCE_CLAUDE"]
-    if args.once:
-        tick(root, claude_bin)
+    if args.mode == "metrics":       # 조회 전용: claude_bin 없이도 동작
+        print_metrics(root)
         return
+    claude_bin = os.environ["TOKENDANCE_CLAUDE"]
+    run_state = {"pid": os.getpid(), "started_at": _iso(datetime.now(timezone.utc)),
+                 "ticks_total": 0}
+    if args.once:
+        tick(root, claude_bin, run_state)
+        return
+    startup_reabsorb(root)           # 재기동 가시화(criteria #2): 진행 중 워커/직전 tick 로깅.
     # monitor 는 monitor_interval(60초)마다 — 즉사 빠른 감지/재시도.
     # run_master 는 idle 백오프 주기마다(일 있으면 base, idle 면 점점 늘려 max). 첫 사이클 즉시 기동.
     next_master = 0.0
     master_interval = args.interval
     while True:
         try:
-            new_msgs = monitor(root)
+            rec = monitor(root)
+            record_tick(root, rec, run_state)   # 구조화 tick 영속화(관측성)
+            new_msgs = rec["new_slack_msgs"]
         except Exception as e:  # 루프는 절대 죽지 않는다
             print(f"[supervisor] monitor error: {e}", file=sys.stderr, flush=True)
             new_msgs = 0
