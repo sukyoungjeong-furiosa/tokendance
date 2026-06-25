@@ -192,6 +192,81 @@ class DetectFastCrashTest(unittest.TestCase):
         self.assertIsNone(SV.detect_fast_crash(d, self.now, pid_alive=_dead))
 
 
+class RelaunchArgvTest(unittest.TestCase):
+    """재투입은 항상 --resume(컨텍스트 보존). 세션 없으면 launch-worker 가 fresh 폴백."""
+
+    def test_relaunch_argv_passes_resume(self):
+        argv = SV._relaunch_argv("/some/root", "t1")
+        self.assertEqual(argv[0], "bash")
+        self.assertTrue(argv[1].endswith("launch-worker.sh"))
+        self.assertEqual(argv[2], "t1")
+        self.assertIn("--resume", argv[3:])
+
+
+class HealthCheckResumeTest(unittest.TestCase):
+    """stale running 워커: 세션 있고 pid 죽음 & attempts<MAX → bounded --resume 재투입,
+    아니면(살아있는 hung / 세션 없음 / 한도 초과) needs_human."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = self.tmp.name
+        self.now = datetime.now(timezone.utc)
+        self.stale = _iso(self.now - timedelta(seconds=3000))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _stale(self, tid, session="sid-1", pid=4242, attempts=0):
+        TK.create_task(self.root, tid)
+        S.update(self.root, tid, {"state": "running", "heartbeat": self.stale,
+                                  "worker_session_id": session, "worker_pid": pid,
+                                  "attempts": attempts})
+
+    def test_stale_with_session_pid_dead_resumes(self):
+        self._stale("t1", session="sid-1", attempts=0)
+        relaunched = []
+        dead = SV.health_check(self.root, now=self.now, pid_alive=_dead,
+                               relaunch=lambda root, tid: relaunched.append(tid) or True,
+                               log=lambda m: None)
+        self.assertEqual(relaunched, ["t1"])
+        self.assertEqual(dead, [])                       # needs_human 아님
+        d = S.read(self.root, "t1")
+        self.assertEqual(d["state"], "running")          # in-place 재투입
+        self.assertEqual(d["attempts"], 1)               # bounded 카운트
+
+    def test_stale_with_session_pid_alive_escalates(self):
+        # 살아있는데 heartbeat 만 멈춘 hung 워커 → 중복 위험 → needs_human(재투입 X).
+        self._stale("t1", session="sid-1")
+        relaunched = []
+        dead = SV.health_check(self.root, now=self.now, pid_alive=_alive,
+                               relaunch=lambda root, tid: relaunched.append(tid) or True,
+                               log=lambda m: None)
+        self.assertEqual(relaunched, [])
+        self.assertEqual(dead, ["t1"])
+        self.assertEqual(S.read(self.root, "t1")["state"], "needs_human")
+
+    def test_stale_without_session_escalates(self):
+        # 세션 id 없음(실제로 돈 적 없거나 캡처 실패) → 이어받을 게 없음 → 기존대로 needs_human.
+        self._stale("t1", session=None)
+        relaunched = []
+        dead = SV.health_check(self.root, now=self.now, pid_alive=_dead,
+                               relaunch=lambda root, tid: relaunched.append(tid) or True,
+                               log=lambda m: None)
+        self.assertEqual(relaunched, [])
+        self.assertEqual(dead, ["t1"])
+        self.assertEqual(S.read(self.root, "t1")["state"], "needs_human")
+
+    def test_stale_attempts_exhausted_escalates(self):
+        self._stale("t1", session="sid-1", attempts=3)
+        relaunched = []
+        dead = SV.health_check(self.root, now=self.now, max_attempts=3, pid_alive=_dead,
+                               relaunch=lambda root, tid: relaunched.append(tid) or True,
+                               log=lambda m: None)
+        self.assertEqual(relaunched, [])
+        self.assertEqual(dead, ["t1"])
+        self.assertEqual(S.read(self.root, "t1")["state"], "needs_human")
+
+
 class HandleFastCrashesTest(unittest.TestCase):
     """handle_fast_crashes: 감지된 즉사에 bounded 재시도/에스컬레이션 적용."""
 

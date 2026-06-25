@@ -41,6 +41,17 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(self.launched, [])
 
 
+class LaunchArgvTest(unittest.TestCase):
+    """재투입 정합(#3): 디스패치는 항상 --resume 으로 기동(세션 없으면 launch-worker 가 fresh 폴백)."""
+
+    def test_launch_argv_passes_resume(self):
+        argv = CY._launch_argv("/some/root", "t1")
+        self.assertEqual(argv[0], "bash")
+        self.assertTrue(argv[1].endswith("launch-worker.sh"))
+        self.assertEqual(argv[2], "t1")
+        self.assertIn("--resume", argv[3:])
+
+
 class PlanTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

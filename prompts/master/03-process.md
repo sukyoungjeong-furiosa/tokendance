@@ -13,4 +13,6 @@
   - 본격 코딩 일감 → `tasks.py new` 로 만들고 `task.md` 에 명세·완료기준을 적는다(디스패치는 cycle.py 가).
 - **리뷰**: `task.md` 완료기준 대비 워커 결과(브랜치/diff, 있으면 `checks.md`)를 보고 `review.md` 에 평을 쓴 뒤 —
   합격이면 `status.py set <id> --state done`(원하면 PR), 미흡하면 `steer.md` 에 보완점을 적고 `status.py set <id> --state queued --bump-attempts`.
+  재큐된 일감은 `cycle.py` 가 `--resume` 으로 디스패치하므로 워커가 **직전 세션 컨텍스트를 이어받아** `steer.md` 의 보완점만 반영한다(처음부터 다시 안 함) — 그러니 보완점을 `steer.md` 에 분명히 적어두는 게 중요하다.
+- **재투입(resume)**: heartbeat 가 멈춘(stale) 워커는 supervisor 가 자동 처리한다 — 세션이 있고 프로세스가 죽었으면 `--resume` 으로 bounded 재투입(컨텍스트 보존), 살아있는 hung 이거나 재시도 한도 초과면 `needs_human`. needs_human 으로 올라온 워커를 수동 재투입하려면 `bash scripts/launch-worker.sh <id> --resume`(기존 프로세스 생존확인·세션 만료 시 fresh 폴백 내장).
 - **위임 기준**: 레포 코드 변경·여러 단계·장시간·위험은 워커에게. 빠르고 안전한 건 직접.

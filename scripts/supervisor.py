@@ -49,21 +49,50 @@ def _log(msg):
     print(f"[supervisor] {msg}", file=sys.stderr, flush=True)
 
 
-def health_check(root, now=None, stale_seconds=STALE_SECONDS):
-    """running 인데 heartbeat 가 없거나 stale 한 워커를 needs_human 으로 전환.
+def health_check(root, now=None, stale_seconds=STALE_SECONDS, max_attempts=MAX_ATTEMPTS,
+                 pid_alive=None, relaunch=None, log=_log):
+    """running 인데 heartbeat 가 없거나 stale 한 워커를 처리.
+
+    stale 워커가 직전 세션을 갖고 있고(worker_session_id) pid 가 죽었고 재시도 한도가
+    남았으면 `--resume` 으로 in-place 재투입한다(컨텍스트 보존, running 유지). 그렇지 않으면
+    — 살아있는 hung(중복 위험) / 세션 없음(이어받을 것 없음) / 한도 초과 — needs_human 으로 에스컬레이션.
 
     생사 판정을 pid 가 아니라 heartbeat 신선도로 하는 이유: setsid 후 claude 가
     재fork/재부모화하여 launch 시점의 pid 가 실제 워커 pid 와 불일치(Task 1 스파이크).
+    pid 는 "안전하게 재투입해도 되는가(=죽었는가)"의 보조 신호로만 쓴다.
+
+    반환값: needs_human 으로 전환된 task id 목록(재투입된 것은 제외).
     """
     if now is None:
         now = datetime.now(timezone.utc)
+    if relaunch is None:
+        relaunch = _relaunch_worker
+    if pid_alive is None:
+        pid_alive = _pid_alive
     dead = []
     for d in TK.list_tasks(root, state="running"):
         hb = d.get("heartbeat")
         stale = (hb is None) or ((now - _parse_iso(hb)).total_seconds() > stale_seconds)
-        if stale:
-            S.update(root, d["id"], {"state": "needs_human"})
-            dead.append(d["id"])
+        if not stale:
+            continue
+        tid = d["id"]
+        session = d.get("worker_session_id")
+        attempts = d.get("attempts", 0)
+        if session and not pid_alive(d.get("worker_pid")) and attempts < max_attempts:
+            S.update(root, tid, {}, increment_attempts=True)   # attempts++ (상태 running 유지)
+            ok = relaunch(root, tid)
+            log(f"stale {tid}: heartbeat 정지 + pid 죽음 → --resume 재투입 "
+                f"(attempt {attempts + 1}/{max_attempts}) relaunch={'ok' if ok else 'FAIL'}")
+            continue
+        reason = ("재투입 한도 초과" if (session and attempts >= max_attempts)
+                  else "재개할 세션 없음" if not session
+                  else "워커 살아있음(hung) — 중복 방지")
+        S.update(root, tid, {
+            "state": "needs_human",
+            "failure_reason": f"heartbeat 정지(stale); {reason}",
+        })
+        log(f"stale {tid}: heartbeat 정지 → needs_human ({reason})")
+        dead.append(tid)
     return dead
 
 
@@ -124,11 +153,17 @@ def detect_fast_crash(d, now, grace=GRACE_SECONDS, pid_alive=_pid_alive, log_tex
     return None               # 미진행이지만 살아있거나 pid 불명 + 시그니처 없음 → 보수적으로 둔다
 
 
-def _relaunch_worker(root, task_id):
-    """launch-worker.sh 로 워커를 in-place 재기동. 성공하면 True."""
+def _relaunch_argv(root, task_id):
+    """재투입은 항상 --resume: 직전 세션 컨텍스트를 이어받는다(없으면 launch-worker 가 fresh 폴백).
+    fast-crash·stale 재시도 공통 진입점."""
     script = os.path.join(root, "scripts", "launch-worker.sh")
+    return ["bash", script, task_id, "--resume"]
+
+
+def _relaunch_worker(root, task_id):
+    """launch-worker.sh --resume 로 워커를 in-place 재기동. 성공하면 True."""
     try:
-        r = subprocess.run(["bash", script, task_id], cwd=root,
+        r = subprocess.run(_relaunch_argv(root, task_id), cwd=root,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return r.returncode == 0
     except Exception:
