@@ -473,6 +473,29 @@ class RecordTickTest(unittest.TestCase):
     def test_read_metrics_absent_is_none(self):
         self.assertIsNone(SV.read_metrics(self.root))
 
+    def test_ticks_rotate_when_over_threshold(self):
+        # 임계를 작게 낮춰 회전을 강제: 누적이 임계를 넘으면 .jsonl → .jsonl.1 로 회전되고
+        # 활성 .jsonl 은 임계 미만으로 다시 줄어든다(디스크 bounded). 직전 백업 1개만 보관.
+        jsonl = os.path.join(self.root, "state", "supervisor.ticks.jsonl")
+        rs = {"pid": 1, "started_at": "2026-06-25T00:00:00Z", "ticks_total": 0}
+        orig = SV.MAX_TICKS_BYTES
+        SV.MAX_TICKS_BYTES = 200   # 한두 tick 이면 넘는 작은 임계
+        try:
+            for i in range(10):
+                SV.record_tick(self.root, self._tick(f"2026-06-25T00:{i:02d}:00Z"), rs)
+            self.assertTrue(os.path.exists(jsonl + ".1"))          # 회전 발생
+            # 회전은 append 직전에 일어나므로 활성 파일은 최대 임계+한 줄까지(무한 증가 안 함).
+            self.assertLess(os.path.getsize(jsonl), SV.MAX_TICKS_BYTES + 512)
+        finally:
+            SV.MAX_TICKS_BYTES = orig
+
+    def test_no_rotation_below_threshold(self):
+        # 임계 미만에서는 백업이 생기지 않는다(작은 운용에서 불필요한 회전 방지).
+        rs = {"pid": 1, "started_at": "2026-06-25T00:00:00Z", "ticks_total": 0}
+        SV.record_tick(self.root, self._tick("2026-06-25T00:01:00Z"), rs)
+        self.assertFalse(os.path.exists(
+            os.path.join(self.root, "state", "supervisor.ticks.jsonl.1")))
+
 
 class StartupReabsorbTest(unittest.TestCase):
     """startup_reabsorb: 재기동 시 상태 재흡수 관측 + 중복/오판 없음(criteria #2)."""

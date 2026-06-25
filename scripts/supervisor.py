@@ -22,6 +22,11 @@ BACKOFF_FACTOR = 2       # idle 마스터 틱이 연속될 때 다음 주기를 
 MONITOR_INTERVAL = 60    # 60초 — 헬스/즉사 감시 주기(마스터보다 훨씬 자주)
 STALE_SECONDS = 1200     # 20분 — heartbeat 이보다 오래되면 죽은 워커로 간주(느린 주 판정)
 
+# ── ticks.jsonl 회전 파라미터 ──
+# ticks.jsonl 은 tick 당 한 줄(≈280KB/day) 무한 증가하므로 size 기준으로 회전한다.
+# 임계 초과 시 ticks.jsonl → ticks.jsonl.1(직전 백업 1개만, 덮어씀) → 디스크는 최대 ≈2×임계로 bounded.
+MAX_TICKS_BYTES = 5 * 1024 * 1024   # 5MB(≈18일치). 초과하면 .1 로 회전
+
 # ── 즉사(fast-crash) 감지 파라미터 ──
 GRACE_SECONDS = 180      # launch 후 이 시간 안에는 즉사로 판정하지 않는다(갓 띄운 워커 오판 방지)
 PROGRESS_EPSILON = 30    # heartbeat 가 launch 보다 이 이상 신선하면 "한 번이라도 체크포인트함"으로 본다
@@ -293,6 +298,19 @@ def monitor(root, now=None):
     }
 
 
+def _rotate_ticks(p, max_bytes=MAX_TICKS_BYTES):
+    """ticks.jsonl 이 max_bytes 이상이면 p → p.1 로 회전(직전 백업 1개만 보관, 덮어씀).
+
+    append 직전에 호출 → 파일이 임계를 넘은 채로 무한 증가하지 않는다. 백업 1개라 디스크는
+    최대 ≈2×max_bytes 로 bounded. 파일이 없으면(첫 tick) no-op.
+    """
+    try:
+        if os.path.getsize(p) >= max_bytes:
+            os.replace(p, p + ".1")
+    except FileNotFoundError:
+        pass
+
+
 def record_tick(root, tick, run_state):
     """tick 레코드를 ticks.jsonl 에 append + metrics.json 스냅샷 덮어쓰기(criteria #3,#4).
 
@@ -302,6 +320,7 @@ def record_tick(root, tick, run_state):
     run_state["ticks_total"] = run_state.get("ticks_total", 0) + 1
     p = _ticks_path(root)
     os.makedirs(os.path.dirname(p), exist_ok=True)
+    _rotate_ticks(p, MAX_TICKS_BYTES)   # 전역을 call-time 에 읽어 회전(테스트가 임계를 낮춰 검증)
     with open(p, "a") as f:
         f.write(json.dumps(tick, ensure_ascii=False) + "\n")
         f.flush()

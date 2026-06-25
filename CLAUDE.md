@@ -15,7 +15,7 @@
 - claude 바이너리: 환경변수 `TOKENDANCE_CLAUDE`.
 - root 실행이라 claude 기동 시 `IS_SANDBOX=1` + `--dangerously-skip-permissions` 필요.
 - supervisor 기동/정지: `scripts/start.sh` / `scripts/stop.sh`. start.sh 는 `scripts/supervise.sh` keepalive 래퍼를 `setsid` 로 띄우고(래퍼 pid=`supervisor.pid`, 프로세스그룹 리더), 래퍼가 supervisor.py 가 죽으면 자동 재기동한다(빠른 크래시 백오프, `state/supervisor.lock` flock 로 중복 방지). stop.sh 는 그룹째 종료한다.
-- supervisor 관측성: `state/supervisor.ticks.jsonl`(tick 당 JSON), `state/supervisor.metrics.json`(요약 스냅샷; `python3 scripts/supervisor.py metrics`), `state/supervisor.respawn.log`(재기동 이벤트). 모두 `state/` 라 git 추적 안 함.
+- supervisor 관측성: `state/supervisor.ticks.jsonl`(tick 당 JSON; 5MB 초과 시 `.jsonl.1` 로 회전, 디스크 bounded), `state/supervisor.metrics.json`(요약 스냅샷; `python3 scripts/supervisor.py metrics`), `state/supervisor.respawn.log`(재기동 이벤트). 모두 `state/` 라 git 추적 안 함.
 
 ## Slack (봇 토큰 모드)
 - `config.local.md` 에 `SLACK_BOT_TOKEN`(xoxb) 과 `SLACK_CHANNEL`(상대 user id)을 둔다(git 추적 안 함; 템플릿 `config.example.md`). 둘 중 하나라도 없으면 Slack 연동을 건너뛴다.
