@@ -17,9 +17,20 @@
 메타가 아닌 줄) 이후부터 본문이다. 블록은 다음 `## ` 헤딩 또는 EOF 에서 끝난다.
 """
 import argparse
+import contextlib
+import fcntl
 import json
 import os
 import re
+
+# ── tier (지식 등급) ──
+# 확실한 1급은 primary, 사서가 코드기반으로 채운 불확실 신규는 candidate(격리, 사람 승인 전).
+# 하위호환: tier 필드가 없는(레거시) 엔트리는 primary 로 취급한다.
+TIER_PRIMARY = "primary"
+TIER_CANDIDATE = "candidate"
+
+# harvest 와 librarian(사서)이 ledger 를 동시에 만지지 않도록 직렬화하는 락 파일명.
+LEDGER_LOCK_NAME = ".harvest-ledger.lock"
 
 _HEADING_RE = re.compile(r"^##\s+지식:\s*(.*?)\s*$")
 _META_KEYS = ("scope", "repo", "tags", "summary")
@@ -115,6 +126,41 @@ def _entry_key(scope, repo, slug):
     return f"playbook:{slug}"
 
 
+# --- tier 헬퍼 ---------------------------------------------------------------
+
+def entry_tier(entry):
+    """엔트리의 tier 를 정규화해 반환. 누락/미지정/알수없음 → primary(하위호환)."""
+    t = (entry.get("tier") or TIER_PRIMARY)
+    return TIER_CANDIDATE if t == TIER_CANDIDATE else TIER_PRIMARY
+
+
+def is_candidate(entry):
+    return entry_tier(entry) == TIER_CANDIDATE
+
+
+# --- ledger 락 (harvest ↔ librarian 직렬화) ----------------------------------
+
+def _lock_path(root):
+    return os.path.join(root, "library", LEDGER_LOCK_NAME)
+
+
+@contextlib.contextmanager
+def ledger_lock(root):
+    """ledger 읽기-수정-재렌더 구간을 flock(LOCK_EX)으로 직렬화한다.
+
+    harvest 와 librarian 이 같은 락 파일(`library/.harvest-ledger.lock`)을 잡으므로
+    한쪽이 ledger 를 편집/재렌더하는 동안 다른 쪽은 대기한다(경합 시 ledger 손상 방지).
+    """
+    os.makedirs(os.path.join(root, "library"), exist_ok=True)
+    f = open(_lock_path(root), "w")
+    try:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        f.close()
+
+
 # --- ledger -----------------------------------------------------------------
 
 def _ledger_path(root):
@@ -174,12 +220,22 @@ def _build_entry(block, scope, repo, slug):
         "summary": meta.get("summary", ""),
         "tags": meta.get("tags", ""),
         "body": block["body"],
+        "tier": TIER_PRIMARY,   # 워커 log 에서 수확한 지식은 1급(사람이 검증한 작업 산출)
         "sources": [],
     }
 
 
 def harvest(root):
-    """모든 워커 log.md 를 스캔해 ledger 를 갱신하고 library 를 재렌더한다."""
+    """모든 워커 log.md 를 스캔해 ledger 를 갱신하고 library 를 재렌더한다.
+
+    librarian(사서)과 같은 flock 으로 직렬화한다 — 사서가 ledger 를 편집/재렌더하는
+    중간에 harvest 가 끼어들어 서로의 변경을 덮어쓰지 않게.
+    """
+    with ledger_lock(root):
+        return _harvest_locked(root)
+
+
+def _harvest_locked(root):
     ledger = load_ledger(root)
     entries = ledger.setdefault("entries", {})
     summary = {"created": [], "updated": [], "skipped": []}
@@ -219,9 +275,11 @@ def _render_library(root, ledger):
     lib = os.path.join(root, "library")
     entries = ledger.get("entries", {})
     auto = "> ⚙️ 자동 생성: scripts/harvest_knowledge.py. 직접 편집하지 말 것.\n"
+    # candidate tier 는 1급 라이브러리(playbooks/repos)에서 제외하고 candidates.md 로 격리한다.
+    primary = [e for e in entries.values() if not is_candidate(e)]
 
     # playbooks: 엔트리당 파일 하나.
-    playbooks = [e for e in entries.values() if e["scope"] == "playbook"]
+    playbooks = [e for e in primary if e["scope"] == "playbook"]
     if playbooks:
         os.makedirs(os.path.join(lib, "playbooks"), exist_ok=True)
     for e in playbooks:
@@ -234,7 +292,7 @@ def _render_library(root, ledger):
 
     # repos: dest 파일별로 엔트리들을 섹션으로 묶는다.
     repos = {}
-    for e in entries.values():
+    for e in primary:
         if e["scope"] == "repo":
             repos.setdefault(e["dest"], []).append(e)
     if repos:
@@ -252,17 +310,51 @@ def _render_library(root, ledger):
         with open(os.path.join(lib, dest), "w") as f:
             f.write("".join(out))
 
+    _render_candidates(root, ledger)
     _render_index(root, ledger)
+
+
+def _render_candidates(root, ledger):
+    """candidate tier 엔트리들을 단일 `library/candidates.md` 로 집계 렌더(사람 검토용).
+
+    1급 라이브러리와 분리해 사람이 승인하기 전 지식을 한곳에서 본다. 항상 덮어써
+    승격(promote)된 항목이 잔존하지 않게 한다.
+    """
+    lib = os.path.join(root, "library")
+    cands = sorted([e for e in ledger.get("entries", {}).values() if is_candidate(e)],
+                   key=lambda x: x["slug"])
+    auto = "> ⚙️ 자동 생성: scripts/harvest_knowledge.py. 직접 편집하지 말 것.\n"
+    out = ["# 후보 지식 (검토 대기)\n", auto,
+           "\n사서(librarian)가 코드 기반으로 보강했으나 불확실한 신규 지식. "
+           "사람 승인 시 1급으로 승격된다.\n"]
+    if not cands:
+        out.append("\n(아직 없음)\n")
+    for e in cands:
+        out.append(f"\n## {e['title']}\n")
+        scope_label = (f"repo:{e['repo']}" if e["scope"] == "repo" else "playbook")
+        out.append(f"*scope: {scope_label}*")
+        if e.get("tags"):
+            out.append(f" · *태그: {e['tags']}*")
+        out.append("\n")
+        if e.get("summary"):
+            out.append(f"\n> {e['summary']}\n")
+        out.append(f"\n{e['body']}\n")
+        out.append(f"\n*출처: {', '.join(e.get('sources', []))}*\n")
+    with open(os.path.join(lib, "candidates.md"), "w") as f:
+        f.write("".join(out))
 
 
 def _render_index(root, ledger):
     entries = ledger.get("entries", {})
-    pb = sorted([e for e in entries.values() if e["scope"] == "playbook"],
+    primary = [e for e in entries.values() if not is_candidate(e)]
+    pb = sorted([e for e in primary if e["scope"] == "playbook"],
                 key=lambda x: x["slug"])
-    repo_entries = [e for e in entries.values() if e["scope"] == "repo"]
+    repo_entries = [e for e in primary if e["scope"] == "repo"]
     by_repo = {}
     for e in repo_entries:
         by_repo.setdefault(e["repo"], []).append(e)
+    cands = sorted([e for e in entries.values() if is_candidate(e)],
+                   key=lambda x: x["slug"])
 
     lines = [
         "# tokendance 지식 라이브러리 — 목차",
@@ -287,6 +379,13 @@ def _render_index(root, ledger):
                 suffix = f" — {e['summary']}" if e.get("summary") else ""
                 link = f"{e['dest']}#{e['anchor']}"
                 lines.append(f"- [{e['title']}]({link}){suffix}")
+    else:
+        lines.append("(아직 없음)")
+    lines += ["", "## candidates    검토 대기 (사서 보강, 사람 승인 전)"]
+    if cands:
+        for e in cands:
+            suffix = f" — {e['summary']}" if e.get("summary") else ""
+            lines.append(f"- [{e['title']}](candidates.md#{anchor(e['title'])}){suffix}")
     else:
         lines.append("(아직 없음)")
     lines.append("")

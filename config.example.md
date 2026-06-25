@@ -22,6 +22,10 @@ POLL_INTERVAL=21600
 # 마스터 세션을 이만큼 이어간(--resume) 뒤 새 세션으로 리셋(맥락은 롤링노트가 인계).
 # prompts/master/* 가 바뀌면 cycles 와 무관하게 즉시 리셋(편집 자동 반영).
 MASTER_SESSION_MAX_CYCLES=20
+
+# 사서(librarian) 패스를 도는 KST 시각(새벽). 미설정이면 3(새벽 3시).
+# 그 시각 + idle(처리할 일감 없음)일 때 하루 1회 지식 라이브러리를 자가 큐레이션한다.
+LIBRARIAN_HOUR_KST=3
 ```
 
 ## 그 외 환경 (셸 환경변수로 주입)

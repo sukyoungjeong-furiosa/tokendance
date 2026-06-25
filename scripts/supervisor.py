@@ -18,6 +18,8 @@ import prompt as PROMPT
 import slack as SL
 import report as RP
 import inbox as IB
+import config as C
+import librarian as LIB
 
 INTERVAL = 1800          # 30분 — 마스터 기동 base 주기(일이 있을 때)
 MAX_INTERVAL = 21600     # 6시간 — idle 백오프 상한(마스터 주기)
@@ -461,6 +463,40 @@ def has_active_work(root):
     return any(TK.list_tasks(root, state=s) for s in ACTIVE_STATES)
 
 
+# ── 사서(librarian) 트리거 ──
+# 마스터 일감관리와 분리된 별도 역할. 하루 1회 KST 새벽(LIBRARIAN_HOUR_KST) + idle 일 때만
+# 지식 라이브러리 큐레이션 패스를 돌린다. state/librarian.last 로 하루 중복 방지.
+LIBRARIAN_HOUR_KST = 3   # 기본값(config 의 LIBRARIAN_HOUR_KST 로 덮어씀)
+
+
+def maybe_run_librarian(root, claude_bin, now=None, idle=None, target_hour=None, run=None):
+    """게이트(KST시각+idle+하루1회)를 통과하면 사서를 1회 트리거. 실행했으면 True.
+
+    실행 결정 시점에 last-run 을 기록(mark_run)해 같은 날 중복 기동을 막는다 — 패스가
+    느리거나 실패해도 그날은 다시 안 돈다. 매 monitor tick 호출되므로 idle 백오프와 무관하게
+    새벽 윈도를 놓치지 않는다.
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    if idle is None:
+        idle = not has_active_work(root)
+    if target_hour is None:
+        try:
+            target_hour = C.get_int("LIBRARIAN_HOUR_KST", r=root)
+        except Exception:
+            target_hour = LIBRARIAN_HOUR_KST
+    if run is None:
+        run = LIB.run_librarian
+    if not LIB.should_run(now, idle, LIB.read_last_run(root), target_hour):
+        return False
+    LIB.mark_run(root, now)
+    try:
+        run(root, claude_bin)
+    except Exception as e:
+        print(f"[supervisor] librarian error: {e}", file=sys.stderr, flush=True)
+    return True
+
+
 def next_interval(prev_interval, idle, base=INTERVAL,
                   max_interval=MAX_INTERVAL, factor=BACKOFF_FACTOR):
     """다음 sleep 간격(초)을 계산하는 순수 함수(부작용 없음).
@@ -535,6 +571,11 @@ def main(argv=None):
             new_msgs = 0
         if new_msgs:                 # 새 Slack 메시지 → 마스터를 즉시 깨운다(백오프 무시)
             next_master = 0.0
+        try:
+            # 사서: 매 tick 게이트 확인(KST 새벽 + idle + 하루 1회). 마스터 백오프와 독립.
+            maybe_run_librarian(root, claude_bin)
+        except Exception as e:
+            print(f"[supervisor] librarian gate error: {e}", file=sys.stderr, flush=True)
         if time.monotonic() >= next_master:
             idle = not has_active_work(root)   # 마스터 기동 직전 판정
             try:

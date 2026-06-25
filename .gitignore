@@ -18,10 +18,12 @@ credentials*.json
 # ── 에이전트가 축적하는 지식 (인스턴스별; index.md 스켈레톤만 추적) ──
 library/playbooks/
 library/repos/
+library/candidates.md
 
 # ── 개발 부산물 ──
 .superpowers/sdd/
 __pycache__/
 *.pyc
 library/.harvest-ledger.json
+library/.harvest-ledger.lock
 library/index.md

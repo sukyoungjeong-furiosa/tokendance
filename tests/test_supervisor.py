@@ -557,5 +557,56 @@ class PlanSessionTest(unittest.TestCase):
         self.assertEqual(SV.plan_session(meta, "h1", 20), ("fresh", None))
 
 
+class MaybeRunLibrarianTest(unittest.TestCase):
+    """maybe_run_librarian: KST시각+idle+하루1회 게이트로 사서를 0/1회 트리거."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = self.tmp.name
+        os.makedirs(os.path.join(self.root, "state"))
+        # 2026-06-24 18:00Z = 2026-06-25 03:00 KST → target_hour=3 윈도.
+        self.now = datetime(2026, 6, 24, 18, 0, tzinfo=timezone.utc)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_runs_when_idle_at_target_hour_once(self):
+        calls = []
+        ran = SV.maybe_run_librarian(self.root, "claude", now=self.now, idle=True,
+                                     target_hour=3,
+                                     run=lambda root, cb: calls.append(1))
+        self.assertTrue(ran)
+        self.assertEqual(calls, [1])
+        # last-run 기록되어 같은 날 두 번째 호출은 no-op(하루 1회).
+        ran2 = SV.maybe_run_librarian(self.root, "claude", now=self.now, idle=True,
+                                      target_hour=3,
+                                      run=lambda root, cb: calls.append(1))
+        self.assertFalse(ran2)
+        self.assertEqual(calls, [1])
+
+    def test_skips_when_not_idle(self):
+        calls = []
+        ran = SV.maybe_run_librarian(self.root, "claude", now=self.now, idle=False,
+                                     target_hour=3, run=lambda root, cb: calls.append(1))
+        self.assertFalse(ran)
+        self.assertEqual(calls, [])
+
+    def test_skips_outside_target_hour(self):
+        calls = []
+        off = datetime(2026, 6, 24, 17, 0, tzinfo=timezone.utc)  # 02:00 KST
+        ran = SV.maybe_run_librarian(self.root, "claude", now=off, idle=True,
+                                     target_hour=3, run=lambda root, cb: calls.append(1))
+        self.assertFalse(ran)
+        self.assertEqual(calls, [])
+
+    def test_idle_derived_from_active_work_when_not_given(self):
+        # idle 미지정이면 has_active_work 로 유도. queued 일감 있으면 active → skip.
+        TK.create_task(self.root, "t1")  # queued
+        calls = []
+        ran = SV.maybe_run_librarian(self.root, "claude", now=self.now, target_hour=3,
+                                     run=lambda root, cb: calls.append(1))
+        self.assertFalse(ran)
+
+
 if __name__ == "__main__":
     unittest.main()

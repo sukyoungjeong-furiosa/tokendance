@@ -165,6 +165,75 @@ class HarvestTest(unittest.TestCase):
         self.assertEqual(data["entries"]["playbook:기록"]["sources"], ["t1"])
 
 
+class TierRenderTest(unittest.TestCase):
+    """tier-aware 렌더: candidate 는 1급(playbooks/repos/index)에서 제외, candidates.md 로 격리.
+    tier 누락(레거시) 엔트리는 1급으로 렌더(하위호환)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = self.tmp.name
+        os.makedirs(os.path.join(self.root, "library"))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _ledger(self, entries):
+        return {"version": 1, "entries": entries}
+
+    def test_candidate_excluded_from_primary_present_in_candidates(self):
+        ledger = self._ledger({
+            "playbook:일급": {"title": "일급", "scope": "playbook", "repo": None,
+                             "slug": "일급", "dest": "playbooks/일급.md", "anchor": None,
+                             "summary": "", "tags": "", "body": "확실한 본문",
+                             "tier": "primary", "sources": ["t1"]},
+            "candidate:playbook:후보": {"title": "후보", "scope": "playbook", "repo": None,
+                                       "slug": "후보", "dest": "playbooks/후보.md",
+                                       "anchor": None, "summary": "추정", "tags": "",
+                                       "body": "불확실 본문", "tier": "candidate",
+                                       "sources": ["t2"]},
+        })
+        HK._render_library(self.root, ledger)
+        lib = os.path.join(self.root, "library")
+        self.assertTrue(os.path.exists(os.path.join(lib, "playbooks", "일급.md")))
+        self.assertFalse(os.path.exists(os.path.join(lib, "playbooks", "후보.md")))
+        with open(os.path.join(lib, "candidates.md")) as f:
+            cand = f.read()
+        self.assertIn("후보", cand)
+        self.assertIn("불확실 본문", cand)
+        self.assertNotIn("확실한 본문", cand)
+        with open(os.path.join(lib, "index.md")) as f:
+            idx = f.read()
+        self.assertIn("일급", idx)
+        self.assertIn("candidates.md", idx)   # candidate 섹션 링크
+
+    def test_legacy_entry_without_tier_renders_as_primary(self):
+        ledger = self._ledger({
+            "playbook:레거시": {"title": "레거시", "scope": "playbook", "repo": None,
+                               "slug": "레거시", "dest": "playbooks/레거시.md",
+                               "anchor": None, "summary": "", "tags": "",
+                               "body": "tier 없음", "sources": ["t1"]},  # tier 필드 없음
+        })
+        HK._render_library(self.root, ledger)
+        self.assertTrue(os.path.exists(
+            os.path.join(self.root, "library", "playbooks", "레거시.md")))
+
+
+class HarvestLockTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = self.tmp.name
+        os.makedirs(os.path.join(self.root, "library"))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_harvest_creates_lock_file_and_succeeds(self):
+        _make_task(self.root, "t1", "## 지식: 락\n\n본문.\n")
+        HK.harvest(self.root)
+        self.assertTrue(os.path.exists(HK._lock_path(self.root)))
+        self.assertIn("playbook:락", HK.load_ledger(self.root)["entries"])
+
+
 class CliTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
