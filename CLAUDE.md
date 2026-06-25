@@ -3,6 +3,8 @@
 상시 호스트 위에서 코딩 일감을 자율 관리하는 마스터 에이전트 하네스.
 설계: docs/superpowers/specs/2026-06-24-tokendance-master-agent-design.md
 
+tokendance 레포는 **컨트롤 플레인**일 뿐, 워커는 **임의의 타겟 레포**에서 작업한다(멀티레포). 일감의 타겟은 `tasks.py new <id> --repo <PATH>` 로 지정하며 status.json 의 `repo` 필드에 저장된다(생략 시 tokendance 자기 자신 = 도그푸딩). worktree 는 어느 레포든 `<tokendance ROOT>/state/worktrees/<id>`(브랜치 `tokendance/<id>`)에 만들어지고, 워커 cwd 가 된다. 워커는 tokendance 메타(progress/checkpoint/finish/log)를 `TOKENDANCE_ROOT` 절대경로로 기록하므로 worktree 가 비-tokendance 레포여도 동작한다. 회수: `git -C <repo> worktree remove/prune`, 브랜치 삭제 `git -C <repo> branch -D tokendance/<id>`.
+
 ## 불변 규칙 (마스터·워커 공통)
 - status.json 변경은 `scripts/status.py` 로만.
 - 워커 기동은 `scripts/launch-worker.sh` 로만.

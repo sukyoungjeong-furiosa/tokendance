@@ -1,23 +1,36 @@
 # tokendance 워커
 
-너는 격리된 코딩 일꾼이다. task id 는 프롬프트에 주어진다. cwd=네 git worktree.
-마스터와 컨텍스트 공유 없음. 모든 소통은 파일.
+너는 격리된 코딩 일꾼이다. task id 는 프롬프트에 주어진다. 마스터와 컨텍스트 공유 없음. 모든 소통은 파일.
+
+## 경로 모델 (중요 — 멀티레포)
+두 위치를 구분하라. 섞으면 깨진다.
+- **cwd = 타겟 레포 worktree** (`state/worktrees/<id>`, 브랜치 `tokendance/<id>`). **코드 변경은 전부 여기서** 한다.
+  타겟 레포는 tokendance 일 수도, npu-tools 같은 임의 레포일 수도 있다 — worktree 엔 그 레포 파일만 있다.
+- **tokendance ROOT = `$TOKENDANCE_ROOT`** (프롬프트에 절대경로로도 주어짐). tokendance 메타(task/progress/checkpoint/finish/log/steer)는 **전부 여기**에 있다.
+  cwd(worktree)엔 `scripts/`·`state/` 가 **없을 수 있으므로**, tokendance 스크립트·상태 파일은 **항상 `$TOKENDANCE_ROOT/...` 절대경로**로 다뤄라. `cd $TOKENDANCE_ROOT` 하지 말 것(cwd 는 worktree 유지).
+
+아래 명령은 worktree(cwd) 어디에서 실행해도 동작한다. (`$TOKENDANCE_ROOT` 가 비었으면 프롬프트에 적힌 절대경로를 직접 쓴다.)
 
 ## 시작
-- `state/tasks/<id>/task.md` 로 일감·완료기준 파악.
-- `library/index.md` 에서 **필요한 항목만** 펼쳐 읽기(전부 X).
-- 변경은 네 worktree 의 브랜치에서. main 직접 push 금지.
+- `$TOKENDANCE_ROOT/state/tasks/<id>/task.md` 로 일감·완료기준 파악.
+- `$TOKENDANCE_ROOT/library/index.md` 에서 **필요한 항목만** 펼쳐 읽기(전부 X).
+- 변경은 cwd(타겟 레포 worktree)의 브랜치 `tokendance/<id>` 에서. 어떤 레포든 main 직접 push 금지.
 
 ## 진행 (각 의미 있는 단계 경계마다)
-1. `state/tasks/<id>/progress.md` 갱신: 현재 단계 / 하는 일 / 애매한 점 / 한 가정 / 자체점검.
-2. `python3 scripts/checkpoint.py <id>` 실행 → heartbeat 갱신 + 새 steer 를 출력한다. 출력이 있으면 반영하고 `log.md` 에 남긴다.
+1. `$TOKENDANCE_ROOT/state/tasks/<id>/progress.md` 갱신: 현재 단계 / 하는 일 / 애매한 점 / 한 가정 / 자체점검.
+2. `python3 $TOKENDANCE_ROOT/scripts/checkpoint.py <id>` 실행 → heartbeat 갱신 + 새 steer 를 출력한다. 출력이 있으면 반영하고 `$TOKENDANCE_ROOT/state/tasks/<id>/log.md` 에 남긴다.
    (heartbeat 가 ~20분 멈추면 죽은 워커로 간주됨 — 긴 작업 전후로 자주 호출.)
 
-## 종료 (`scripts/finish.py`)
-- 완료 → 결과(브랜치/산출물 경로)를 progress.md 에 적고 `python3 scripts/finish.py <id> --review`.
-- 사람 판단 필요 → progress.md 에 질문 적고 `python3 scripts/finish.py <id> --needs-human`.
-- 기술적 막힘 → `python3 scripts/finish.py <id> --blocked --reason "…"`.
-- 회복 불가 → `python3 scripts/finish.py <id> --failed --reason "…"`.
+## 종료 (`$TOKENDANCE_ROOT/scripts/finish.py`)
+- 완료 → 결과(브랜치/산출물 경로)를 progress.md 에 적고 `python3 $TOKENDANCE_ROOT/scripts/finish.py <id> --review`.
+- 사람 판단 필요 → progress.md 에 질문 적고 `python3 $TOKENDANCE_ROOT/scripts/finish.py <id> --needs-human`.
+- 기술적 막힘 → `python3 $TOKENDANCE_ROOT/scripts/finish.py <id> --blocked --reason "…"`.
+- 회복 불가 → `python3 $TOKENDANCE_ROOT/scripts/finish.py <id> --failed --reason "…"`.
 
 ## 지식 수확
-재사용할 노하우/레포 사실은 `log.md` 에 "## 지식:" 블록으로 남긴다 — 형식은 `prompts/knowledge-block.template.md` 참고. 마스터가 harvest 로 library 에 승격한다.
+재사용할 노하우/레포 사실은 `$TOKENDANCE_ROOT/state/tasks/<id>/log.md` 에 "## 지식:" 블록으로 남긴다 — 형식은 `$TOKENDANCE_ROOT/prompts/knowledge-block.template.md` 참고. 마스터가 harvest 로 library 에 승격한다.
+
+## worktree 회수 (참고 — 책임자는 마스터)
+네 task 가 종료되면 마스터가 회수한다. 타겟 레포가 무엇이든 동일(`<repo>` = status.json 의 `repo` 필드):
+`git -C <repo> worktree remove --force $TOKENDANCE_ROOT/state/worktrees/<id>` → `git -C <repo> worktree prune`,
+브랜치는 검토/머지 후 `git -C <repo> branch -D tokendance/<id>`.

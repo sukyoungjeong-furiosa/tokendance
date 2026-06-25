@@ -10,6 +10,7 @@ cat > "$FAKE" <<'EOF'
 #!/usr/bin/env bash
 echo "fake worker args: $*"
 echo "cwd=$(pwd)"
+echo "TOKENDANCE_ROOT=${TOKENDANCE_ROOT:-<unset>}"
 sleep 2
 EOF
 chmod +x "$FAKE"
@@ -49,4 +50,8 @@ WT="$WORK/state/worktrees/t1"
 test -d "$WT" || { echo "FAIL: worktree 미생성"; exit 1; }
 grep -q "cwd=$WT" "$WORK/state/workers/t1.log" || {
   echo "FAIL: 워커 cwd 가 worktree 아님"; cat "$WORK/state/workers/t1.log"; exit 1; }
+# 워커 프로세스에 tokendance ROOT 절대경로가 env(TOKENDANCE_ROOT)로 전달됐는지(멀티레포 완료기준 #1).
+# cwd 가 비-tokendance 레포 worktree 여도 워커가 절대경로로 scripts/state 를 찾게 해주는 핵심.
+grep -q "TOKENDANCE_ROOT=$WORK" "$WORK/state/workers/t1.log" || {
+  echo "FAIL: TOKENDANCE_ROOT env 미전달"; cat "$WORK/state/workers/t1.log"; exit 1; }
 echo "PASS"
