@@ -89,6 +89,21 @@ fi
 # (env 가 어떤 이유로 비어도) PROMPT 에도 병기해 이중화한다. checkpoint.py/finish.py 등은
 # 스크립트 파일 위치로 root 를 잡으므로 절대경로 호출이면 cwd 와 무관하게 정상 동작한다.
 export TOKENDANCE_ROOT="$ROOT"
+# 타겟 레포가 제공하는 worker 환경(.tokendance-worktree.env)을 있으면 주입한다.
+#   - 메인 레포 체크아웃($REPO)에서 읽는다 — manifest 와 같은 소스(추적/미추적 무관).
+#     커밋하면 worktree 에도 보이지만, 호스트 운영 설정으로 미추적 드롭만 해도 동작한다.
+#   - worktree 생성 후 source 하므로 $WORKTREE(이 워커의 worktree 절대경로)를 참조할 수 있다.
+#   - set -a 로 export → setsid→env→claude 로 상속되어 워커의 모든 Bash 호출이 env 를 본다.
+#   - 파일이 없는 레포(tokendance 도그푸딩 등)는 무영향(폴백 동작 그대로).
+#   - 임의 코드 실행이지만 워커가 이미 같은 레포 빌드를 신뢰 실행하므로 트러스트 경계는 동일.
+#     (예: npu-tools 는 이 파일로 LIBTORCH 를 자동 주입 → 워커가 수동 export 없이 libtorch 사용.)
+export WORKTREE
+REPO="$(status_field repo)"
+WORKER_ENV_FILE="$REPO/.tokendance-worktree.env"
+if [ -n "$REPO" ] && [ -f "$WORKER_ENV_FILE" ]; then
+  set -a; . "$WORKER_ENV_FILE"; set +a
+  echo "[launch-worker] $TASK_ID: 워커 환경 주입 ($WORKER_ENV_FILE)" >&2
+fi
 if [ "$RESUMING" -eq 1 ]; then
   PROMPT="이어서 진행하라. 너는 tokendance 워커이고 task id=${TASK_ID} 다. 직전 세션을 이어받았다. tokendance ROOT(절대경로)=${ROOT} (환경변수 TOKENDANCE_ROOT 에도 있음). cwd 는 타겟 레포 worktree 다. ${TASK_DIR}/steer.md 의 새 피드백과 ${TASK_DIR}/progress.md 를 먼저 확인하고 남은 일을 계속하라. 규칙은 ${ROOT}/prompts/worker.md."
 else
