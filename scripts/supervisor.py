@@ -16,6 +16,7 @@ import status as S
 import tasks as TK
 import prompt as PROMPT
 import slack as SL
+import report as RP
 
 INTERVAL = 1800          # 30분 — 마스터 기동 base 주기(일이 있을 때)
 MAX_INTERVAL = 21600     # 6시간 — idle 백오프 상한(마스터 주기)
@@ -287,6 +288,12 @@ def monitor(root, now=None):
     dead = health_check(root, now=now)
     try:
         new_msgs = SL.poll_new(root)   # 봇 토큰으로 새 DM 을 inbox 로(LLM 없이). 새 메시지 수.
+        if new_msgs:
+            # 수신 즉시 상태요약 ack(LLM 없이, 스크립트만) — ping/pong 느낌. 실제 처리 답변은 마스터가 이어서.
+            try:
+                SL.post(root, f"👀 받았어요! 지금 상태: {RP.counts_line(root)}. 확인하고 곧 정리해서 알려드릴게요 🙂")
+            except Exception:
+                pass
     except Exception as e:
         print(f"[supervisor] slack poll error: {e}", file=sys.stderr, flush=True)
         new_msgs = 0

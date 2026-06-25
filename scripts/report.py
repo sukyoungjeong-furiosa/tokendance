@@ -49,6 +49,14 @@ def _oneliner(root, d):
     return f"{d['id']} — {title}" + (f" · {note[:80]}" if note else "")
 
 
+def counts_line(root):
+    """상태별 카운트 한 줄(예: '🟢2 🔎1 🟡0 ...'). ack/요약에 재사용."""
+    by = {}
+    for d in TK.list_tasks(root):
+        by[d.get("state")] = by.get(d.get("state"), 0) + 1
+    return " ".join(f"{emoji}{by.get(st, 0)}" for st, emoji, _ in SECTIONS)
+
+
 def build_report(root, now=None):
     tasks = TK.list_tasks(root)
     by = {}
