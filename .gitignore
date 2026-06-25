@@ -24,3 +24,4 @@ library/repos/
 __pycache__/
 *.pyc
 library/.harvest-ledger.json
+library/index.md
