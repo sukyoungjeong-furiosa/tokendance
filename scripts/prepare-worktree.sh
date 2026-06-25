@@ -85,12 +85,36 @@ else
   artifacts=("${DEFAULT_ARTIFACTS[@]}")
 fi
 
+# src(메인레포) → dst(worktree) 단일 symlink. 멱등(낡은 링크 교체, 추적 실체는 보존).
+link_one() {
+  local src="$1" dst="$2" label="$3"
+  if [ -L "$dst" ]; then rm -f "$dst"; fi     # 낡은/잘못된 링크 교체
+  [ -e "$dst" ] && return 0                    # 추적되는 실제 콘텐츠는 보존
+  mkdir -p "$(dirname "$dst")"
+  ln -s "$src" "$dst"
+  log "링크: $label -> $src"
+}
+
 for entry in "${artifacts[@]}"; do
   src="$REPO/$entry"
   dst="$WT/$entry"
-  [ -e "$src" ] || continue                  # 원본 없으면 건너뜀
-  if [ -L "$dst" ]; then rm -f "$dst"; fi     # 낡은/잘못된 링크 교체
-  if [ -e "$dst" ]; then continue; fi         # 추적되는 실제 콘텐츠는 보존
+  [ -e "$src" ] || continue                    # 원본 없으면 건너뜀
+  if [ -L "$dst" ]; then rm -f "$dst"; fi       # 낡은/잘못된 링크 교체
+  if [ -e "$dst" ]; then
+    # dst 가 worktree 의 실제(추적) 콘텐츠. src·dst 둘 다 진짜 디렉토리면,
+    # 통째 보존-skip 대신 자식 1단계 병합 — dst 에 이미 있는 자식(추적 포인터: dvc 등)은
+    # 보존하고, worktree 에 없는 자식(gitignore 추출본: libtorch jammy/current 등)만 링크한다.
+    # (예: npu-tools artifacts/furiosa-libtorch — dvc 포인터는 추적, 추출본은 gitignore.)
+    # 1단계만 병합한다: 자식이 다시 부분추적이면 그 자식을 manifest 에 따로 명시하라.
+    if [ -d "$dst" ] && [ ! -L "$dst" ] && [ -d "$src" ] && [ ! -L "$src" ]; then
+      shopt -s nullglob dotglob
+      for child in "$src"/*; do
+        link_one "$child" "$dst/$(basename "$child")" "$entry/$(basename "$child")"
+      done
+      shopt -u nullglob dotglob
+    fi
+    continue                                    # 그 외(파일 충돌 등)는 보존
+  fi
   mkdir -p "$(dirname "$dst")"
   ln -s "$src" "$dst"
   log "링크: $entry -> $src"

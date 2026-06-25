@@ -15,6 +15,7 @@
 - `$TOKENDANCE_ROOT/state/tasks/<id>/task.md` 로 일감·완료기준 파악.
 - `$TOKENDANCE_ROOT/library/index.md` 에서 **필요한 항목만** 펼쳐 읽기(전부 X).
 - 변경은 cwd(타겟 레포 worktree)의 브랜치 `tokendance/<id>` 에서. 어떤 레포든 main 직접 push 금지.
+- **아티팩트는 재사용된다 — 새로 받지 마라.** 레포가 `.tokendance-worktree.manifest`/`.tokendance-worktree.env` 를 두면 무거운 아티팩트(libtorch 등)가 메인 체크아웃에서 symlink/env 로 자동 제공된다. 예) npu-tools: `LIBTORCH` 가 이미 주입돼 있으니 `dvc pull` 이나 수동 `export LIBTORCH=...` 하지 말고 그대로 빌드/테스트하라(`echo $LIBTORCH` 로 확인).
 
 ## 진행 (각 의미 있는 단계 경계마다)
 1. `$TOKENDANCE_ROOT/state/tasks/<id>/progress.md` 갱신: 현재 단계 / 하는 일 / 애매한 점 / 한 가정 / 자체점검.

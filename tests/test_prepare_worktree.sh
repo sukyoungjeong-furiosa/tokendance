@@ -78,4 +78,39 @@ WT3="$(bash "$WORK/scripts/prepare-worktree.sh" t2 2>"$WORK/err3.log")" \
 test -L "$WT3/.venv" || fail "manifest 항목 .venv 링크 안 됨"
 test ! -e "$WT3/node_modules" || fail "manifest 에 없는 node_modules 가 링크됨"
 
+# ── (e) 부분추적 디렉토리 병합 ──
+# manifest 항목이 "git 추적 콘텐츠와 gitignore 추출본이 섞인 디렉토리"를 가리킬 때
+# (예: npu-tools artifacts/furiosa-libtorch — dvc 포인터는 추적, 추출본은 gitignore):
+# 통째 skip 하지 말고 자식 1단계 병합 — 추적 포인터는 보존하고 worktree 에 없는 자식만 링크.
+REPO3="$WORK/repo3"
+mkdir -p "$REPO3"
+git -C "$REPO3" init -q
+git -C "$REPO3" config user.email t@t.test
+git -C "$REPO3" config user.name tester
+mkdir -p "$REPO3/art"
+echo ptr > "$REPO3/art/pointer.dvc"                 # 추적 포인터
+printf 'extracted/\ncurrent\n' > "$REPO3/art/.gitignore"  # 추출본은 gitignore
+git -C "$REPO3" add -A; git -C "$REPO3" commit -qm init
+# 메인레포에만 존재하는(gitignore 라 worktree 엔 안 옴) 무거운 추출본
+mkdir -p "$REPO3/art/extracted"; echo lib > "$REPO3/art/extracted/libtorch.so"
+ln -s extracted "$REPO3/art/current"
+printf 'art\n' > "$REPO3/.tokendance-worktree.manifest"
+python3 "$WORK/scripts/status.py" --root "$WORK" init t3 --repo "$REPO3" >/dev/null
+WT4="$(bash "$WORK/scripts/prepare-worktree.sh" t3 2>"$WORK/err4.log")" \
+  || { cat "$WORK/err4.log"; fail "부분추적 병합 케이스 실패"; }
+# 추적 포인터는 worktree 의 실제 파일로 보존(심링크로 덮어쓰지 않음)
+test -f "$WT4/art/pointer.dvc" && test ! -L "$WT4/art/pointer.dvc" || fail "추적 포인터 보존 실패"
+test -f "$WT4/art/.gitignore" && test ! -L "$WT4/art/.gitignore" || fail "추적 .gitignore 보존 실패"
+# 추출본은 메인레포로 symlink 되어 도달 가능
+test -L "$WT4/art/extracted" || fail "추출본 extracted 가 symlink 아님"
+test -f "$WT4/art/extracted/libtorch.so" || fail "링크 통해 추출본 접근 불가"
+test "$(readlink -f "$WT4/art/extracted")" = "$(readlink -f "$REPO3/art/extracted")" \
+  || fail "extracted 링크가 원본을 안 가리킴"
+test -e "$WT4/art/current/libtorch.so" || fail "current(추출본 심링크) resolve 실패"
+# 멱등 재실행: 링크/보존 유지
+bash "$WORK/scripts/prepare-worktree.sh" t3 >/dev/null 2>"$WORK/err4b.log" \
+  || { cat "$WORK/err4b.log"; fail "부분추적 멱등 재실행 실패"; }
+test -L "$WT4/art/extracted" || fail "멱등 후 추출본 링크 깨짐"
+test -f "$WT4/art/pointer.dvc" && test ! -L "$WT4/art/pointer.dvc" || fail "멱등 후 포인터 깨짐"
+
 echo "PASS"
