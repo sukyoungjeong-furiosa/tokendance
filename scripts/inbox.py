@@ -14,10 +14,18 @@ def _sub(root, name):
 
 
 def add(root, text, slug="item"):
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    # 마이크로초까지 포함해 한 poll 에서 연달아 들어온 메시지도 파일명이 안 겹치게 하고,
+    # 그래도 겹치면(동일 마이크로초) 카운터를 붙여 절대 덮어쓰지 않는다(메시지 유실 방지).
+    now = datetime.now(timezone.utc)
+    ts = now.strftime("%Y%m%dT%H%M%S") + f"{now.microsecond:06d}Z"
     safe = "".join(c if c.isalnum() or c in "-_" else "-" for c in slug)[:40]
+    pending = _sub(root, "pending")
     name = f"{ts}-{safe}.md"
-    with open(os.path.join(_sub(root, "pending"), name), "w") as f:
+    n = 1
+    while os.path.exists(os.path.join(pending, name)):
+        name = f"{ts}-{safe}-{n}.md"
+        n += 1
+    with open(os.path.join(pending, name), "w") as f:
         f.write(text)
     return name
 

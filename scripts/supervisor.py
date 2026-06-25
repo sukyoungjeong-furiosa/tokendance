@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """상주 루프: 짧은 주기로 워커 헬스/즉사를 감시하고, 30분마다 headless 마스터를 1회 기동."""
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -362,16 +363,78 @@ def startup_reabsorb(root, now=None, log=_log):
     return running
 
 
+# ── 마스터 세션 연속성(하이브리드 resume) ──
+# 매 사이클 같은 세션을 --resume 해 맥락을 잇되, 아래 조건에서 새 세션으로 리셋한다:
+#   - 세션 없음(첫 기동)
+#   - 프롬프트(assembled)가 바뀜 → 편집이 즉시 반영되도록(데몬 재시작 불필요)
+#   - cycles 가 한도 도달 → 무한 성장/compaction 방지
+# 리셋 시 맥락은 state/master-notes.md(롤링 노트)가 인계한다.
+SESSION_MAX_CYCLES = 20   # 기본값(config 의 MASTER_SESSION_MAX_CYCLES 로 덮어씀)
+
+
+def _session_path(root):
+    return os.path.join(root, "state", "master-session.json")
+
+
+def _load_session(root):
+    try:
+        with open(_session_path(root)) as f:
+            return json.load(f)
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+def _save_session(root, data):
+    p = _session_path(root)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w") as f:
+        json.dump(data, f)
+
+
+def plan_session(meta, prompt_hash, max_cycles):
+    """('fresh', None) 또는 ('resume', session_id). 순수 함수."""
+    sid = meta.get("id")
+    if not sid:
+        return ("fresh", None)
+    if meta.get("prompt_hash") != prompt_hash:
+        return ("fresh", None)        # 프롬프트 바뀜 → 새 세션으로 반영
+    if meta.get("cycles", 0) >= max_cycles:
+        return ("fresh", None)        # 한도 → 리셋(노트가 맥락 인계)
+    return ("resume", sid)
+
+
 def run_master(root, claude_bin):
     user_prompt = ("너는 tokendance 마스터다. 시스템 프롬프트의 지침대로 "
                    "정확히 한 번의 관리 사이클을 수행한 뒤 종료하라.")
     sysprompt = PROMPT.build(root, "master")   # prompts/master/*.md 조립
+    phash = hashlib.sha256(sysprompt.encode()).hexdigest()[:16]
+    meta = _load_session(root)
+    try:
+        max_cycles = C.get_int("MASTER_SESSION_MAX_CYCLES", r=root)
+    except Exception:
+        max_cycles = SESSION_MAX_CYCLES
+    mode, sid = plan_session(meta, phash, max_cycles)
+
+    args = [claude_bin, "-p", user_prompt,
+            "--dangerously-skip-permissions", "--output-format", "json"]
+    if mode == "resume":
+        args += ["--resume", sid]              # 맥락 이어감(시스템 프롬프트는 세션에 이미 있음)
+    else:
+        args += ["--append-system-prompt", sysprompt]   # 새 세션: 프롬프트 주입
+
     env = {**os.environ, "IS_SANDBOX": "1"}  # root 에서 자율 권한 허용에 필수
-    return subprocess.run(
-        [claude_bin, "-p", user_prompt,
-         "--append-system-prompt", sysprompt,
-         "--dangerously-skip-permissions"],
-        cwd=root, env=env)
+    proc = subprocess.run(args, cwd=root, env=env, capture_output=True, text=True)
+
+    new_sid = sid
+    try:
+        new_sid = json.loads(proc.stdout).get("session_id") or sid
+    except Exception:
+        pass
+    cycles = (meta.get("cycles", 0) + 1) if mode == "resume" else 1
+    if new_sid:
+        _save_session(root, {"id": new_sid, "prompt_hash": phash, "cycles": cycles})
+    _log(f"master {mode} (cycle {cycles}/{max_cycles}, session {str(new_sid)[:8]})")
+    return proc
 
 
 def tick(root, claude_bin, run_state=None):

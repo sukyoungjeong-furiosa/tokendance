@@ -15,6 +15,7 @@ DEFAULTS = {
     "MAX_WORKERS": "1",        # worktree 격리 있으니 1 이상 가능
     "POLL_INTERVAL": "1800",   # base 틱 주기(초); idle 백오프는 supervisor 가 처리
     "SLACK_CHANNEL": "",       # 비면 Slack 연동 skip
+    "MASTER_SESSION_MAX_CYCLES": "20",  # 마스터 세션을 이만큼 이어간 뒤 리셋(맥락은 롤링노트가 인계)
 }
 
 
