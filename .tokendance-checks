@@ -1,0 +1,6 @@
+# tokendance 자체 검증 스위트 (run-checks.sh 가 review 단계에서 실행).
+# 한 줄당 한 명령. #주석/빈 줄 무시. 모두 exit 0 이어야 pass.
+python3 -m unittest discover -s tests -p 'test_*.py'
+bash tests/test_prepare_worktree.sh
+bash tests/test_launch_worker.sh
+bash tests/test_run_checks.sh
