@@ -20,19 +20,4 @@
 - 회복 불가 → `python3 scripts/finish.py <id> --failed --reason "…"`.
 
 ## 지식 수확
-재사용할 노하우/레포 사실을 `log.md` 에 아래 형식의 "## 지식:" 블록으로 남긴다(마스터가 harvest 로 library 승격).
-
-### 지식 블록 형식 (엄격히 — 파서가 이 규약대로 읽는다)
-```
-## 지식: <한 줄 제목>
-scope: playbook | repo        ← 선택. 생략 시 휴리스틱
-repo: <레포명>                ← 선택. scope=repo 인데 생략하면 task 의 repo 로 폴백
-tags: 키워드, 키워드          ← 선택
-summary: 한 줄 요약           ← 선택(인덱스 목차에 표시)
-                              ← 메타 끝나면 빈 줄 하나
-<본문 markdown. 다음 `## ` 헤딩 또는 파일 끝까지가 본문.>
-```
-- 헤딩은 `## 지식: ` (H2, 콜론)로 시작, 제목 한 줄.
-- 헤딩 바로 아래 연속하는 `key: value` 만 메타. 그 외/빈 줄부터는 본문.
-- 분류: `scope` 최우선 → 없으면 `repo:` 있으면 repo, 아니면 playbook(기본). 레포 특정이면 `scope: repo` 또는 `repo:` 를 꼭.
-- 같은 제목 = 같은 항목(멱등 갱신). log.md 는 append-only; 승격 추적은 마스터 ledger 가 하니 표식 불필요.
+재사용할 노하우/레포 사실은 `log.md` 에 "## 지식:" 블록으로 남긴다 — 형식은 `prompts/knowledge-block.template.md` 참고. 마스터가 harvest 로 library 에 승격한다.
