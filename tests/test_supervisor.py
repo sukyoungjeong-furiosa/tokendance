@@ -538,5 +538,24 @@ class StartupReabsorbTest(unittest.TestCase):
         self.assertEqual(tick2["running_checked"], 0)
 
 
+class PlanSessionTest(unittest.TestCase):
+    """하이브리드 resume: 맥락 유지 vs 리셋 결정 로직."""
+
+    def test_fresh_when_no_session(self):
+        self.assertEqual(SV.plan_session({}, "h1", 20), ("fresh", None))
+
+    def test_resume_when_same_hash_under_limit(self):
+        meta = {"id": "sid", "prompt_hash": "h1", "cycles": 5}
+        self.assertEqual(SV.plan_session(meta, "h1", 20), ("resume", "sid"))
+
+    def test_fresh_when_prompt_changed(self):
+        meta = {"id": "sid", "prompt_hash": "OLD", "cycles": 5}
+        self.assertEqual(SV.plan_session(meta, "NEW", 20), ("fresh", None))
+
+    def test_fresh_when_cycle_limit_reached(self):
+        meta = {"id": "sid", "prompt_hash": "h1", "cycles": 20}
+        self.assertEqual(SV.plan_session(meta, "h1", 20), ("fresh", None))
+
+
 if __name__ == "__main__":
     unittest.main()

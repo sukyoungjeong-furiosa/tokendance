@@ -18,6 +18,10 @@ MAX_WORKERS=1
 # supervisor 깨어남 주기(초). 미설정이면 1800(30분).
 # 값을 바꾸면 stop.sh/start.sh 로 재시작해야 적용됨(데몬이 시작 시 1회 로드).
 POLL_INTERVAL=21600
+
+# 마스터 세션을 이만큼 이어간(--resume) 뒤 새 세션으로 리셋(맥락은 롤링노트가 인계).
+# prompts/master/* 가 바뀌면 cycles 와 무관하게 즉시 리셋(편집 자동 반영).
+MASTER_SESSION_MAX_CYCLES=20
 ```
 
 ## 그 외 환경 (셸 환경변수로 주입)
