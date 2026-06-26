@@ -87,8 +87,10 @@ cat state/tasks/<id>/progress.md              # 워커 진행(peek)
 echo -e "## $(date -u +%FT%TZ)\n이렇게 해줘" >> state/tasks/<id>/steer.md   # 조향(append)
 python3 scripts/tasks.py archive <id>         # 종료(done/failed) task 를 state/tasks-archive/ 로 정리
 ```
-`archive` 는 종료 상태만 허용(활성 task 보호)하고, 남은 worktree 는 안전 회수 가능할 때만 치운 뒤
-이동한다(회수 불가 시 거부 → 고아 방지). worktree 자동 GC + 일일 다이제스트는 `morning.py` 가 매일 수행.
+`archive` 는 종료 상태(done/failed)만 허용(활성 task 보호). worktree 는 **추적 파일 미커밋 변경이
+없으면** 제거하고 이동한다(커밋은 브랜치에 남으니 안전; untracked 산출물만 버림). 미커밋 변경이
+있으면 거부(진짜 unsaved 보호). **브랜치는 건드리지 않는다** — 미푸시 커밋 손실 방지.
+머지된 브랜치 GC + 일일 다이제스트는 `morning.py` 가 매일 수행.
 
 ### 파일 레이아웃
 ```

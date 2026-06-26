@@ -3,6 +3,7 @@
 import argparse
 import os
 import shutil
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -49,11 +50,25 @@ def count_running(root):
     return len(list_tasks(root, state="running"))
 
 
+def _worktree_has_tracked_changes(wt):
+    """worktree 에 '추적 파일' 미커밋 변경(M/A/D/R/U…)이 있으면 True.
+
+    untracked(`??` — 보통 빌드 산출물·심볼릭링크)는 무시한다: 커밋된 작업은 브랜치에 보존되고
+    추적 변경만이 worktree 제거로 잃을 수 있는 '진짜 unsaved' 다. git 레포가 아니면 False.
+    """
+    r = subprocess.run(["git", "-C", wt, "status", "--porcelain"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return False
+    return any(line[:2] != "??" for line in r.stdout.splitlines() if line.strip())
+
+
 def archive(root, task_id):
     """종료(done/failed) task 를 state/tasks-archive/ 로 이동. 활성 task 는 거부.
 
-    worktree 가 남아있으면 morning 의 안전 결정으로 'remove' 가능할 때만 회수하고,
-    회수 불가(결과 미보존/조사 중 등)면 archive 를 거부한다 — 고아 worktree 방지(수동 확인 유도).
+    worktree 가 남아있으면 제거한다(커밋은 브랜치에 남으므로 안전). 단 추적 파일에 미커밋
+    변경이 있으면 거부한다 — 그것만이 worktree 제거로 잃을 수 있는 진짜 unsaved 작업이다.
+    **브랜치는 건드리지 않는다**(미푸시 커밋 손실 방지; 머지된 브랜치 정리는 morning 담당).
     반환: 이동된 아카이브 경로.
     """
     d = S.read(root, task_id)              # 없으면 여기서 에러
@@ -62,16 +77,21 @@ def archive(root, task_id):
         raise ValueError(f"종료 상태(done/failed)만 archive 가능 — 현재 '{state}'. 활성 task 는 보호됨.")
 
     wt = os.path.join(root, "state", "worktrees", task_id)
-    if os.path.isdir(wt):
-        import morning as M                # 지연 import (순환 방지)
-        facts = M.gather_facts(root, d)
-        dec = M.gc_decision(d, facts)
-        if dec.get("action") == "remove":
-            M.execute_gc(root, d, dec)
-        else:
+    # 안전 가드: 정확히 state/worktrees/<id> 직계만 다룬다(경로 탈출 방지).
+    wt_abs = os.path.abspath(wt)
+    wroot = os.path.abspath(os.path.join(root, "state", "worktrees"))
+    if os.path.isdir(wt) and os.path.dirname(wt_abs) == wroot and os.path.basename(wt_abs) == task_id:
+        if _worktree_has_tracked_changes(wt):
             raise ValueError(
-                f"worktree 가 남아있고 자동 회수 대상이 아님({dec.get('reason')}). "
-                f"수동으로 worktree 를 정리한 뒤 다시 archive 하세요. (archive 중단)")
+                "worktree 에 미커밋(추적) 변경이 있음 — 커밋/정리 후 archive 하세요. "
+                "(커밋된 작업은 브랜치에 보존되니, 정리하면 worktree 만 안전히 제거됨)")
+        repo = d.get("repo") or root
+        subprocess.run(["git", "-C", repo, "worktree", "remove", "--force", wt],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["git", "-C", repo, "worktree", "prune"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if os.path.isdir(wt):              # 등록 worktree 가 아니었거나 잔여 → 디렉토리만 정리
+            shutil.rmtree(wt)
 
     src = os.path.join(root, "state", "tasks", task_id)
     dst_base = os.path.join(root, "state", "tasks-archive")

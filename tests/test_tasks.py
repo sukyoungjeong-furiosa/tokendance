@@ -49,13 +49,35 @@ class TasksTest(unittest.TestCase):
             TK.archive(self.root, "t1")
         self.assertTrue(os.path.exists(os.path.join(self.root, "state", "tasks", "t1")))
 
-    def test_archive_refuses_unreclaimable_worktree(self):
-        # done 이지만 worktree 가 남아있고 결과 미보존(브랜치 없음) → 회수 불가 → archive 거부(고아 방지).
+    def test_archive_removes_clean_worktree(self):
+        # done + worktree 가 깨끗(추적 변경 없음) → worktree 제거하고 archive 성공.
         TK.create_task(self.root, "t1")
         S.update(self.root, "t1", {"state": "done"})
-        os.makedirs(os.path.join(self.root, "state", "worktrees", "t1"))
+        wt = os.path.join(self.root, "state", "worktrees", "t1")
+        os.makedirs(wt)
+        open(os.path.join(wt, "artifact.so"), "w").close()   # untracked 산출물 — 무시되고 버려짐
+        TK.archive(self.root, "t1")
+        self.assertFalse(os.path.isdir(wt))                  # worktree 제거됨
+        self.assertTrue(os.path.exists(
+            os.path.join(self.root, "state", "tasks-archive", "t1", "status.json")))
+
+    def test_archive_refuses_worktree_with_tracked_changes(self):
+        # worktree 가 진짜 git 레포이고 추적 파일에 미커밋 변경 → archive 거부(진짜 unsaved 보호).
+        import subprocess
+        TK.create_task(self.root, "t1")
+        S.update(self.root, "t1", {"state": "done"})
+        wt = os.path.join(self.root, "state", "worktrees", "t1")
+        os.makedirs(wt)
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        subprocess.run(["git", "-C", wt, "init", "-q"], check=True)
+        open(os.path.join(wt, "f.txt"), "w").write("a")
+        subprocess.run(["git", "-C", wt, "add", "f.txt"], check=True)
+        subprocess.run(["git", "-C", wt, "commit", "-qm", "init"], check=True, env=env)
+        open(os.path.join(wt, "f.txt"), "w").write("b")      # 추적 파일 수정(미커밋)
         with self.assertRaises(ValueError):
             TK.archive(self.root, "t1")
+        self.assertTrue(os.path.isdir(wt))                   # 보호: 안 지움
         self.assertTrue(os.path.exists(os.path.join(self.root, "state", "tasks", "t1")))
 
 
