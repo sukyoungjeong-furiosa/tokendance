@@ -155,20 +155,46 @@ def gc_precheck(task, *, current_task_id=None, protected_names=PROTECTED_WORKTRE
 
 def gc_decision(task, facts, *, current_task_id=None,
                 protected_names=PROTECTED_WORKTREE_NAMES, eligible_states=GC_ELIGIBLE_STATES):
-    """worktree GC 결정(순수). 반환 {"action", "reason"}.
+    """worktree GC 결정(순수). 반환 {"action", "remove_worktree", "remove_branch", "reason"}.
 
     action ∈ {"remove", "candidate", "skip"}.
     facts = {"worktree_exists", "branch_exists", "branch_preserved"}.
+
+    worktree 회수와 branch 삭제를 분리한다(사용자 directive 2026-06-26):
+      - **worktree 회수: 공격적.** 백업이 있는 한(로컬 branch 존재 OR 결과 보존) 회수.
+      - **branch 삭제: 보수적.** 결과가 보존(머지/푸시)됐을 때만 삭제. 미보존이면 남긴다(백업).
+    로컬 branch 가 남아 있으면 그게 백업이므로, 머지/푸시 안 됐어도 worktree 는 회수해도 안전하다.
     """
     status, reason = gc_precheck(task, current_task_id=current_task_id,
                                  protected_names=protected_names, eligible_states=eligible_states)
     if status == "skip":
-        return {"action": "skip", "reason": reason}
-    if not facts["worktree_exists"] and not facts["branch_exists"]:
-        return {"action": "skip", "reason": "이미 정리됨(멱등)"}
-    if not facts["branch_preserved"]:
-        return {"action": "candidate", "reason": "결과 미보존(머지/푸시 안 됨) — 수동 확인"}
-    return {"action": "remove", "reason": "done + 결과 보존 확인"}
+        return {"action": "skip", "remove_worktree": False, "remove_branch": False,
+                "reason": reason}
+    wt = facts["worktree_exists"]
+    br = facts["branch_exists"]
+    preserved = facts["branch_preserved"]
+    # worktree 는 백업(branch 존재 OR 보존)이 있을 때만 회수. branch 는 보존됐을 때만 삭제.
+    remove_wt = wt and (preserved or br)
+    delete_br = br and preserved
+    if remove_wt or delete_br:
+        if delete_br and remove_wt:
+            r = "done + 결과 보존 — worktree + branch 회수"
+        elif remove_wt:
+            r = "done + 로컬 branch 백업 존재 — worktree 회수(branch 보존)"
+        else:
+            r = "worktree 이미 회수 + 결과 보존 — branch 정리"
+        return {"action": "remove", "remove_worktree": remove_wt,
+                "remove_branch": delete_br, "reason": r}
+    if not wt and not br:
+        return {"action": "skip", "remove_worktree": False, "remove_branch": False,
+                "reason": "이미 정리됨(멱등)"}
+    if not wt:
+        # worktree 는 이미 회수됨 + branch 는 백업으로 남김(미보존) → 할 일 없음.
+        return {"action": "skip", "remove_worktree": False, "remove_branch": False,
+                "reason": "worktree 이미 회수 · branch 백업 보존"}
+    # worktree 존재하나 백업이 어디에도 없음(미보존 + branch 없음) — 이상 케이스 → 수동 확인.
+    return {"action": "candidate", "remove_worktree": False, "remove_branch": False,
+            "reason": "결과 미보존 + 로컬 branch 없음(백업 없음) — 수동 확인"}
 
 
 # ── 사실 수집 + 실행 (IO) ────────────────────────────────────────────────────
@@ -187,12 +213,18 @@ def gather_facts(root, task, runner=_run):
 def execute_gc(root, task, decision, runner=_run, log=lambda m: None, dry_run=False):
     """decision.action == 'remove' 일 때만 worktree/브랜치를 제거. 실행(/예정) 단계 목록 반환.
 
+    worktree 제거는 decision['remove_worktree'], branch 삭제는 decision['remove_branch'] 로
+    독립적으로 게이트된다(둘 다 없으면 하위호환으로 True 취급). 미보존 done 은 remove_branch=False
+    로 worktree 만 회수하고 로컬 branch 는 백업으로 남긴다.
+
     안전: worktree 경로가 정확히 state/worktrees/<id> 일 때만 조작한다(ROOT/메인 체크아웃 불가침).
     멱등: worktree 디렉토리/브랜치가 이미 없으면 해당 단계를 건너뛴다. 순서: worktree → branch.
     dry_run=True 면 같은 단계 문자열을 만들되 mutating git 명령은 실행하지 않는다(미리보기).
     """
     if decision.get("action") != "remove":
         return []
+    remove_wt = decision.get("remove_worktree", True)
+    delete_br = decision.get("remove_branch", True)
     tid = task["id"]
     repo = task.get("repo") or root
     branch = task.get("branch") or ""
@@ -206,13 +238,13 @@ def execute_gc(root, task, decision, runner=_run, log=lambda m: None, dry_run=Fa
         return []
     prefix = "[dry-run] " if dry_run else ""
     steps = []
-    if os.path.isdir(wt):
+    if remove_wt and os.path.isdir(wt):
         if not dry_run:
             runner(["git", "-C", repo, "worktree", "remove", "--force", wt])
             runner(["git", "-C", repo, "worktree", "prune"])
         steps.append(f"{prefix}worktree 제거: {wt}")
         log(f"GC {tid}: {prefix}worktree 제거 ({repo})")
-    if branch and branch_exists(repo, branch, runner):
+    if delete_br and branch and branch_exists(repo, branch, runner):
         if not dry_run:
             runner(["git", "-C", repo, "branch", "-D", branch])
         steps.append(f"{prefix}브랜치 삭제: {branch} ({repo})")
@@ -237,7 +269,8 @@ def run_gc(root, tasks, *, current_task_id=None, runner=_run, log=lambda m: None
         dec = gc_decision(t, facts, current_task_id=current_task_id)
         steps = execute_gc(root, t, dec, runner=runner, log=log, dry_run=dry_run)
         out.append({"task": t["id"], "state": t.get("state"),
-                    "action": dec["action"], "reason": dec["reason"], "steps": steps})
+                    "action": dec["action"], "reason": dec["reason"],
+                    "remove_branch": dec.get("remove_branch", False), "steps": steps})
     return out
 
 
@@ -316,7 +349,9 @@ def build_digest(tasks, gc_actions, *, now_str,
     if removed:
         for a in removed:
             detail = "; ".join(a.get("steps") or []) or "정리됨"
-            L.append(f"  • {a['task']} — {detail}")
+            # worktree+branch 둘 다 회수(보존됨) vs worktree 만 회수(branch 백업 보존) 구분.
+            tag = "worktree+branch 회수" if a.get("remove_branch") else "worktree 회수(branch 보존)"
+            L.append(f"  • {a['task']} [{tag}] — {detail}")
     else:
         L.append("  • 없음")
     if candidates:

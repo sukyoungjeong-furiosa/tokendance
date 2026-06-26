@@ -63,12 +63,30 @@ PRESERVED = {"worktree_exists": True, "branch_exists": True, "branch_preserved":
 
 
 class GcDecisionTest(unittest.TestCase):
-    def test_done_preserved_removes(self):
+    def test_done_preserved_removes_worktree_and_branch(self):
+        # 결과 보존(머지/푸시) → worktree + branch 둘 다 제거.
         d = M.gc_decision(_task("t1"), PRESERVED)
         self.assertEqual(d["action"], "remove")
+        self.assertTrue(d["remove_worktree"])
+        self.assertTrue(d["remove_branch"])
 
-    def test_done_not_preserved_is_candidate(self):
+    def test_done_not_preserved_removes_worktree_keeps_branch(self):
+        # 미보존이지만 로컬 branch 존재(=백업) → worktree 회수하되 branch 는 보존.
         facts = {**PRESERVED, "branch_preserved": False}
+        d = M.gc_decision(_task("t1"), facts)
+        self.assertEqual(d["action"], "remove")
+        self.assertTrue(d["remove_worktree"])
+        self.assertFalse(d["remove_branch"])
+
+    def test_worktree_gone_branch_kept_not_preserved_is_idempotent_skip(self):
+        # worktree 이미 회수됨 + branch 는 백업으로 남김 + 미보존 → 할 일 없음(멱등 skip).
+        facts = {"worktree_exists": False, "branch_exists": True, "branch_preserved": False}
+        d = M.gc_decision(_task("t1"), facts)
+        self.assertEqual(d["action"], "skip")
+
+    def test_no_backup_anywhere_is_candidate(self):
+        # worktree 존재하나 branch 없음 + 미보존 → 어디에도 백업 없음(이상 케이스) → candidate.
+        facts = {"worktree_exists": True, "branch_exists": False, "branch_preserved": False}
         d = M.gc_decision(_task("t1"), facts)
         self.assertEqual(d["action"], "candidate")
 
@@ -98,9 +116,11 @@ class GcDecisionTest(unittest.TestCase):
         self.assertEqual(d["action"], "skip")
 
     def test_worktree_gone_branch_remains_preserved_removes(self):
+        # worktree 없음 + branch 보존됨 → branch-only 정리(remove). worktree 단계는 멱등 생략.
         facts = {"worktree_exists": False, "branch_exists": True, "branch_preserved": True}
         d = M.gc_decision(_task("t1"), facts)
         self.assertEqual(d["action"], "remove")
+        self.assertTrue(d["remove_branch"])
 
 
 # ── branch_preserved (injectable runner) ─────────────────────────────────────
@@ -184,6 +204,18 @@ class ExecuteGcTest(unittest.TestCase):
         i_branch = next(i for i, j in enumerate(joined) if "branch -D" in j)
         self.assertLess(i_remove, i_branch)
         self.assertEqual(len(steps), 2)
+
+    def test_remove_worktree_only_keeps_branch(self):
+        # remove_branch=False → worktree 만 제거하고 branch -D 는 호출하지 않는다(백업 보존).
+        self._wt("t1")
+        steps = M.execute_gc(self.root, _task("t1", branch="tokendance/x"),
+                             {"action": "remove", "remove_worktree": True,
+                              "remove_branch": False, "reason": "worktree 회수(branch 보존)"},
+                             runner=self._runner())
+        joined = [" ".join(c) for c in self.calls]
+        self.assertTrue(any("worktree remove" in j for j in joined))
+        self.assertFalse(any("branch -D" in j for j in joined))
+        self.assertEqual(len(steps), 1)
 
     def test_idempotent_no_worktree_dir_only_branch(self):
         # worktree 디렉토리 없음 → worktree 명령 생략, 브랜치만 삭제.
@@ -298,6 +330,22 @@ class DigestTest(unittest.TestCase):
         self.assertIn("d1", text)
         self.assertIn("정리 후보", text)
         self.assertIn("d2", text)
+
+    def test_digest_distinguishes_branch_preserved_vs_deleted(self):
+        # worktree 회수(branch 보존) 와 worktree+branch 회수(보존됨)를 다르게 표기한다.
+        gc = [
+            {"task": "d1", "state": "done", "action": "remove", "remove_branch": True,
+             "reason": "ok", "steps": ["worktree 제거: ...", "브랜치 삭제: ..."]},
+            {"task": "d2", "state": "done", "action": "remove", "remove_branch": False,
+             "reason": "worktree 회수(branch 보존)", "steps": ["worktree 제거: ..."]},
+        ]
+        text = M.build_digest([], gc, now_str="X")
+        self.assertIn("branch 보존", text)
+        # d2 줄은 branch 보존을 표기, d1 줄은 branch 까지 회수.
+        d2_line = next(l for l in text.splitlines() if "d2" in l)
+        self.assertIn("보존", d2_line)
+        d1_line = next(l for l in text.splitlines() if "d1" in l)
+        self.assertNotIn("보존", d1_line)
 
     def test_done_appears_under_unconfirmed_not_blocking(self):
         # done 은 needs_human 과 별개 분류(✅ 완료·사용자 미확인)에 들어간다.
