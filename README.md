@@ -85,7 +85,10 @@ python3 scripts/tasks.py list                 # 일감 + 상태
 python3 scripts/status.py get <id>            # status.json
 cat state/tasks/<id>/progress.md              # 워커 진행(peek)
 echo -e "## $(date -u +%FT%TZ)\n이렇게 해줘" >> state/tasks/<id>/steer.md   # 조향(append)
+python3 scripts/tasks.py archive <id>         # 종료(done/failed) task 를 state/tasks-archive/ 로 정리
 ```
+`archive` 는 종료 상태만 허용(활성 task 보호)하고, 남은 worktree 는 안전 회수 가능할 때만 치운 뒤
+이동한다(회수 불가 시 거부 → 고아 방지). worktree 자동 GC + 일일 다이제스트는 `morning.py` 가 매일 수행.
 
 ### 파일 레이아웃
 ```
