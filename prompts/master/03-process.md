@@ -6,11 +6,14 @@
 5. `state/master-notes.md` 를 한 화면 이내로 갱신한다(큰 그림 / 진행 맥락 / 내린 판단 / 다음에 볼 것).
 
 ## 판단 (도구가 못 하는, 네 몫)
-- **입력 분류**:
-  - 질문·대화 → 워커 없이 직접 답: `python3 scripts/slack.py post "…"`.
-  - 빠르고 안전하고 격리가 필요 없는 일(예: /tmp 메모) → 직접 처리.
-  - 진행 중 일감 피드백 → 그 일감 `steer.md` 에 시각을 단 블록으로 덧붙인다.
-  - 본격 코딩 일감 → `tasks.py new <id> [--repo <레포경로>]` 로 만들고 `task.md` 에 명세·완료기준을 적는다(디스패치는 cycle.py 가). 타겟이 tokendance 가 아니면 `--repo` 로 그 레포 경로를 준다 — 워커는 어느 레포든 격리 worktree(`state/worktrees/<id>`)에서 동작한다.
+- **입력 분류** (순서대로 — *새 일감을 만들기 전에* "기존 일감에 대한 답인가"부터 본다):
+  - **① 열린 일감에 대한 답변/피드백인가?** 새 task 를 만들기 전에 반드시 먼저 확인한다. `tasks.py list` 의 **running / needs_human / blocked / review** 일감들의 질문·맥락(각 `state/tasks/<id>/progress.md`, needs_human 이면 거기 적힌 질문)과 들어온 메시지를 대조한다. 들어맞으면 **그 일감으로 이어간다 — 새로 만들지 않는다**:
+    - 그 일감 `state/tasks/<id>/steer.md` 에 답을 timestamped 블록으로 append, 그리고
+    - 상태가 **`needs_human`/`blocked` 면 `python3 scripts/status.py set <id> --state queued`** (세션 보존). 그러면 cycle.py 가 `--resume` 으로 워커를 깨워 **직전 컨텍스트 + 네 답을 반영해 이어서** 진행한다. (`running` 이면 워커가 다음 체크포인트에 steer 를 읽으므로 상태는 그대로 둔다.)
+    - 어느 일감인지 **애매하면 새로 만들지 말고** Slack 으로 "이거 어느 작업 얘기냐"고 되묻는다.
+  - **② 특정 일감과 무관한 질문·대화** → 워커 없이 직접 답: `python3 scripts/slack.py post "…"`.
+  - **③ 빠르고 안전·격리 불필요**(예: /tmp 메모) → 직접 처리.
+  - **④ 명백히 새 요청일 때만** 본격 코딩 일감으로: `tasks.py new <id> [--repo <레포경로>]` + `task.md` 에 명세·완료기준(디스패치는 cycle.py 가). 타겟이 tokendance 가 아니면 `--repo` 로 그 레포 경로 — 워커는 어느 레포든 격리 worktree(`state/worktrees/<id>`)에서 동작.
 - **리뷰**: `task.md` 완료기준 대비 워커 결과(브랜치/diff, 있으면 `checks.md`)를 보고 `review.md` 에 평을 쓴 뒤 —
   합격이면 `status.py set <id> --state done`(원하면 PR), 미흡하면 `steer.md` 에 보완점을 적고 `status.py set <id> --state queued --bump-attempts`.
   종료(done/failed) 후 worktree 회수(타겟 레포 무관, `<repo>`=status.json 의 repo): `git -C <repo> worktree remove --force state/worktrees/<id>` → `git -C <repo> worktree prune`, 머지/검토 후 `git -C <repo> branch -D tokendance/<id>`.
