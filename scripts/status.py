@@ -86,9 +86,13 @@ def init(root, task_id, title="", repo=""):
 
 
 def update(root, task_id, changes, expected_version=None, increment_attempts=False):
+    # 멱등/유령 방지: 없는 task(예: 이미 archive 됨)면 락 디렉토리(=task 디렉토리)를
+    # 만들기 전에 차단한다. 안 그러면 _Lock 의 makedirs 가 빈 task 디렉토리를 되살린다.
+    if not os.path.exists(_status_path(root, task_id)):
+        raise ValueError(f"no such task: {task_id}")
     with _Lock(_lock_path(root, task_id)):
         sp = _status_path(root, task_id)
-        if not os.path.exists(sp):
+        if not os.path.exists(sp):       # 락 안에서 재확인(경합 방어)
             raise ValueError(f"no such task: {task_id}")
         with open(sp) as f:
             data = json.load(f)

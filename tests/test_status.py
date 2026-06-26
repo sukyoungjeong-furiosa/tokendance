@@ -24,6 +24,15 @@ class StatusTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             S.init(self.root, "t1")
 
+    def test_update_nonexistent_does_not_resurrect_dir(self):
+        # 이미 archive 된(=없는) task 를 update/set/heartbeat 해도 유령 디렉토리를 만들지 않는다.
+        with self.assertRaises(ValueError):
+            S.update(self.root, "ghost", {"state": "done"})
+        self.assertFalse(os.path.exists(os.path.join(self.root, "state", "tasks", "ghost")))
+        with self.assertRaises(ValueError):
+            S.heartbeat(self.root, "ghost")
+        self.assertFalse(os.path.exists(os.path.join(self.root, "state", "tasks", "ghost")))
+
     def test_set_bumps_version(self):
         S.init(self.root, "t1")
         S.update(self.root, "t1", {"state": "running", "worker_pid": 42})
