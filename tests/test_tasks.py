@@ -78,7 +78,8 @@ class TasksTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             TK.archive(self.root, "t1")
         self.assertTrue(os.path.isdir(wt))                   # 보호: 안 지움
-        self.assertTrue(os.path.exists(os.path.join(self.root, "state", "tasks", "t1")))
+        # done 은 tasks-done/ 에 산다(분리). archive 거부됐으니 그 자리에 그대로 남아야 함.
+        self.assertTrue(os.path.exists(os.path.join(self.root, "state", "tasks-done", "t1")))
 
 
 if __name__ == "__main__":

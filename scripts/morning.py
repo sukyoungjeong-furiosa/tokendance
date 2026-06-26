@@ -31,6 +31,7 @@ from datetime import datetime, timezone, timedelta
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tasks as TK
 import slack as SL
+import status as S
 
 KST = timezone(timedelta(hours=9))
 
@@ -373,7 +374,7 @@ def _note(root, d):
     """needs_human task 의 대기사유 한 줄(failure_reason 우선, 없으면 progress.md 첫 줄)."""
     note = d.get("failure_reason") or ""
     if not note:
-        p = os.path.join(root, "state", "tasks", d["id"], "progress.md")
+        p = os.path.join(S.task_dir(root, d["id"]), "progress.md")
         try:
             for line in open(p):
                 s = line.strip().lstrip("#").strip()

@@ -13,6 +13,7 @@ from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tasks as TK
+import status as S
 
 # 상태 → (이모지, 라벨). 표시 순서이기도 하다.
 SECTIONS = [
@@ -37,7 +38,7 @@ def _oneliner(root, d):
     note = d.get("failure_reason") or ""
     if not note and d.get("state") in ("running", "needs_human"):
         # progress.md 첫 비어있지 않은 줄(헤더 제외)을 단서로.
-        p = os.path.join(root, "state", "tasks", d["id"], "progress.md")
+        p = os.path.join(S.task_dir(root, d["id"]), "progress.md")
         try:
             for line in open(p):
                 s = line.strip().lstrip("#").strip()

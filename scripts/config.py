@@ -31,7 +31,9 @@ def paths(r=None):
     return {
         "root": r,
         "state": j(r, "state"),
-        "tasks": j(r, "state", "tasks"),
+        "tasks": j(r, "state", "tasks"),              # active(queued/running/.../failed)
+        "tasks_done": j(r, "state", "tasks-done"),    # done 전용(분리 보관)
+        "tasks_archive": j(r, "state", "tasks-archive"),  # 수동 archive 만
         "inbox_pending": j(r, "state", "inbox", "pending"),
         "inbox_processed": j(r, "state", "inbox", "processed"),
         "reports": j(r, "state", "reports"),

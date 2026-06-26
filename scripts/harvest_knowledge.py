@@ -186,22 +186,29 @@ def save_ledger(root, ledger):
 # --- 수확 -------------------------------------------------------------------
 
 def _iter_task_logs(root):
-    base = os.path.join(root, "state", "tasks")
-    if not os.path.isdir(base):
-        return
-    for tid in sorted(os.listdir(base)):
-        log = os.path.join(base, tid, "log.md")
-        status = os.path.join(base, tid, "status.json")
-        if not (os.path.exists(log) and os.path.exists(status)):
+    # active(tasks/) + done(tasks-done/) 양쪽의 log.md 를 수확한다. done 은 전용 디렉토리로
+    # 분리되므로 여기서도 양쪽을 봐야 완료 task 의 지식을 놓치지 않는다.
+    seen = set()
+    for base_name in ("tasks", "tasks-done"):
+        base = os.path.join(root, "state", base_name)
+        if not os.path.isdir(base):
             continue
-        repo = ""
-        try:
-            with open(status) as f:
-                repo = json.load(f).get("repo", "") or ""
-        except (OSError, ValueError):
+        for tid in sorted(os.listdir(base)):
+            if tid in seen:
+                continue
+            log = os.path.join(base, tid, "log.md")
+            status = os.path.join(base, tid, "status.json")
+            if not (os.path.exists(log) and os.path.exists(status)):
+                continue
+            seen.add(tid)
             repo = ""
-        with open(log) as f:
-            yield tid, repo, f.read()
+            try:
+                with open(status) as f:
+                    repo = json.load(f).get("repo", "") or ""
+            except (OSError, ValueError):
+                repo = ""
+            with open(log) as f:
+                yield tid, repo, f.read()
 
 
 def _build_entry(block, scope, repo, slug):

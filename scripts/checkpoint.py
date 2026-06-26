@@ -14,13 +14,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import status as S
 
 
-def _task_dir(root, task_id):
-    return os.path.join(root, "state", "tasks", task_id)
-
-
 def read_new_steer(root, task_id):
     """steer.md 에서 steer.cursor(바이트 offset) 이후의 새 텍스트를 반환하고 cursor 를 EOF 로 전진."""
-    td = _task_dir(root, task_id)
+    td = S.task_dir(root, task_id)       # active/done 양쪽 해석
     steer = os.path.join(td, "steer.md")
     cursor = os.path.join(td, "steer.cursor")
     try:

@@ -10,13 +10,86 @@ from datetime import datetime, timezone
 
 STATES = {"queued", "running", "needs_human", "blocked", "review", "done", "failed"}
 
+# task 디렉토리 base 들. done 은 전용 디렉토리로 분리해 active 와 섞이지 않게 한다.
+# (archive 는 별개 — 수동 tasks.py archive 로만 이동하며 작업집합에서 제외되므로 여기 없음.)
+ACTIVE_BASE = "tasks"        # queued/running/needs_human/blocked/review/failed
+DONE_BASE = "tasks-done"     # done 전용(사용자가 done 만 모아 보고 PR 화)
+TASK_BASES = (ACTIVE_BASE, DONE_BASE)
+
 
 def _now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _task_dir(root, task_id):
-    return os.path.join(root, "state", "tasks", task_id)
+def _dir_in(root, base, task_id):
+    return os.path.join(root, "state", base, task_id)
+
+
+def task_dir(root, task_id):
+    """임의 id 의 task 디렉토리를 양쪽 base 에서 해석(resolver).
+
+    done 은 tasks-done/ 에 산다 → 그쪽을 우선 조회(done=권위). 둘 다 없으면 tasks/
+    경로를 반환한다(신규 생성 기본 + 마이그레이션 전 하위호환).
+    """
+    for base in (DONE_BASE, ACTIVE_BASE):
+        if os.path.exists(os.path.join(_dir_in(root, base, task_id), "status.json")):
+            return _dir_in(root, base, task_id)
+    return _dir_in(root, ACTIVE_BASE, task_id)
+
+
+def all_task_ids(root):
+    """양쪽 base(tasks/ + tasks-done/)의 status.json 보유 id 들(정렬·유니크)."""
+    tids = set()
+    for base in TASK_BASES:
+        bdir = os.path.join(root, "state", base)
+        if not os.path.isdir(bdir):
+            continue
+        for tid in os.listdir(bdir):
+            if os.path.exists(os.path.join(bdir, tid, "status.json")):
+                tids.add(tid)
+    return sorted(tids)
+
+
+def _canonical_base(state):
+    """state 가 살아야 할 base. done 만 tasks-done/, 나머지는 모두 tasks/."""
+    return DONE_BASE if state == "done" else ACTIVE_BASE
+
+
+def _reconcile_location(root, task_id, state):
+    """task dir 를 state 의 canonical base 로 이동(멱등). 새 경로 반환.
+
+    done 전환 → tasks-done/ 로, done→다른상태 되돌림 → tasks/ 로. 같은 fs 라 os.rename 은
+    atomic. 호출자는 status.json.lock 을 쥔 채로 부른다 — flock 은 inode 기반이라 디렉토리를
+    rename 해도 fd 가 유효하고, 다른 프로세스는 resolver 로 새 위치를 다시 찾아 같은 inode 에
+    flock 하므로 상호배제가 유지된다. dir 이 이미 canonical 위치면 아무 것도 하지 않는다.
+    """
+    dst = _dir_in(root, _canonical_base(state), task_id)
+    if os.path.isdir(dst):
+        return dst
+    for base in TASK_BASES:
+        cur = _dir_in(root, base, task_id)
+        if cur != dst and os.path.isdir(cur):
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            os.rename(cur, dst)
+            return dst
+    return dst
+
+
+def relocate(root, task_id):
+    """현재 state 기준 canonical base 로 이동(멱등). 마이그레이션/복구용. 새 경로 반환."""
+    if not os.path.exists(_status_path(root, task_id)):
+        raise ValueError(f"no such task: {task_id}")
+    with _Lock(_lock_path(root, task_id)):
+        sp = _status_path(root, task_id)
+        if not os.path.exists(sp):
+            raise ValueError(f"no such task: {task_id}")
+        with open(sp) as f:
+            state = json.load(f).get("state")
+        return _reconcile_location(root, task_id, state)
+
+
+def _task_dir(root, task_id):       # 하위호환 alias (내부 사용처용)
+    return task_dir(root, task_id)
 
 
 def _status_path(root, task_id):
@@ -109,6 +182,8 @@ def update(root, task_id, changes, expected_version=None, increment_attempts=Fal
         data["version"] = data.get("version", 0) + 1
         data["updated"] = _now()
         _atomic_write(sp, data)
+        # 락을 쥔 채 canonical base 로 정렬(done→tasks-done/, 그 외→tasks/). 멱등.
+        _reconcile_location(root, task_id, data.get("state"))
         return data
 
 

@@ -33,13 +33,10 @@ def create_task(root, task_id, title="", repo=""):
 
 
 def list_tasks(root, state=None):
-    base = os.path.join(root, "state", "tasks")
+    # active(tasks/) + done(tasks-done/) 양쪽을 합쳐 본다. done 은 전용 디렉토리로 분리돼도
+    # 목록/카운트에는 그대로 보여야 한다(archive 는 작업집합 밖이라 제외).
     out = []
-    if not os.path.isdir(base):
-        return out
-    for tid in sorted(os.listdir(base)):
-        if not os.path.exists(os.path.join(base, tid, "status.json")):
-            continue
+    for tid in S.all_task_ids(root):
         d = S.read(root, tid)
         if state is None or d.get("state") == state:
             out.append(d)
@@ -93,7 +90,7 @@ def archive(root, task_id):
         if os.path.isdir(wt):              # 등록 worktree 가 아니었거나 잔여 → 디렉토리만 정리
             shutil.rmtree(wt)
 
-    src = os.path.join(root, "state", "tasks", task_id)
+    src = S.task_dir(root, task_id)        # done→tasks-done/, failed→tasks/ 양쪽 해석
     dst_base = os.path.join(root, "state", "tasks-archive")
     os.makedirs(dst_base, exist_ok=True)
     dst = os.path.join(dst_base, task_id)
@@ -101,6 +98,26 @@ def archive(root, task_id):
         raise ValueError(f"이미 아카이브에 존재: {dst}")
     shutil.move(src, dst)
     return dst
+
+
+def migrate_done(root):
+    """기존 state/tasks/ 에 남아있는 done dir 들을 state/tasks-done/ 로 이동(멱등).
+
+    done 디렉토리 분리 도입 전에 완료된 task 들을 lazy 가 아니라 일괄로 옮긴다. 재실행해도
+    무해(이동 후 tasks/ 에는 done 이 없으므로 빈 목록 반환). 이동된 id 목록 반환.
+    배포 시 마스터가 1회 실행한다(워커는 라이브 state/ 를 직접 조작하지 않음).
+    """
+    moved = []
+    base = os.path.join(root, "state", S.ACTIVE_BASE)
+    if not os.path.isdir(base):
+        return moved
+    for tid in sorted(os.listdir(base)):
+        if not os.path.exists(os.path.join(base, tid, "status.json")):
+            continue
+        if S.read(root, tid).get("state") == "done":
+            S.relocate(root, tid)
+            moved.append(tid)
+    return moved
 
 
 def _default_root():
@@ -120,6 +137,7 @@ def main(argv=None):
     sub.add_parser("count-running")
     p = sub.add_parser("archive")
     p.add_argument("task_id")
+    sub.add_parser("migrate-done")
     args = ap.parse_args(argv)
     if args.cmd == "new":
         print(create_task(args.root, args.task_id, args.title, args.repo))
@@ -130,6 +148,9 @@ def main(argv=None):
         print(count_running(args.root))
     elif args.cmd == "archive":
         print("archived →", archive(args.root, args.task_id))
+    elif args.cmd == "migrate-done":
+        moved = migrate_done(args.root)
+        print(f"migrated {len(moved)} done → tasks-done/: {', '.join(moved) or '(none)'}")
 
 
 if __name__ == "__main__":
