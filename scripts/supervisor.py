@@ -20,6 +20,7 @@ import report as RP
 import inbox as IB
 import config as C
 import librarian as LIB
+import morning as MORNING
 
 INTERVAL = 1800          # 30분 — 마스터 기동 base 주기(일이 있을 때)
 MAX_INTERVAL = 21600     # 6시간 — idle 백오프 상한(마스터 주기)
@@ -497,6 +498,40 @@ def maybe_run_librarian(root, claude_bin, now=None, idle=None, target_hour=None,
     return True
 
 
+# ── 마스터 아침 루틴 트리거 ──
+# 마스터 일감관리와 분리된 경량 루틴. 하루 1회 KST 아침(MASTER_MORNING_HOUR_KST)에 완료
+# worktree GC + 일일 다이제스트(Slack)를 돈다. librarian 과 달리 idle 을 요구하지 않는다 —
+# 다이제스트는 진행 중/확인필요 작업을 보고하는 게 목적이므로 매일 무조건. LLM 불필요(순수 스크립트).
+# state/morning.last 로 하루 중복 방지. 매 monitor tick 호출되므로 마스터 백오프와 무관하게
+# 아침 윈도를 놓치지 않는다.
+MASTER_MORNING_HOUR_KST = 7   # 기본값(config 의 MASTER_MORNING_HOUR_KST 로 덮어씀)
+
+
+def maybe_run_morning(root, now=None, target_hour=None, run=None):
+    """게이트(KST 시각 + 하루1회)를 통과하면 아침 루틴을 1회 실행. 실행했으면 True.
+
+    실행 결정 시점에 last-run 을 기록(mark_run)해 같은 날 중복 기동을 막는다 — 루틴이
+    느리거나 실패해도 그날은 다시 안 돈다(librarian 과 동일 원칙).
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    if target_hour is None:
+        try:
+            target_hour = C.get_int("MASTER_MORNING_HOUR_KST", r=root)
+        except Exception:
+            target_hour = MASTER_MORNING_HOUR_KST
+    if run is None:
+        run = MORNING.run_morning
+    if not MORNING.should_run(now, MORNING.read_last_run(root), target_hour):
+        return False
+    MORNING.mark_run(root, now)
+    try:
+        run(root)
+    except Exception as e:
+        print(f"[supervisor] morning error: {e}", file=sys.stderr, flush=True)
+    return True
+
+
 def next_interval(prev_interval, idle, base=INTERVAL,
                   max_interval=MAX_INTERVAL, factor=BACKOFF_FACTOR):
     """다음 sleep 간격(초)을 계산하는 순수 함수(부작용 없음).
@@ -576,6 +611,11 @@ def main(argv=None):
             maybe_run_librarian(root, claude_bin)
         except Exception as e:
             print(f"[supervisor] librarian gate error: {e}", file=sys.stderr, flush=True)
+        try:
+            # 아침 루틴: 매 tick 게이트 확인(KST 아침 + 하루 1회). LLM 불필요(순수 스크립트).
+            maybe_run_morning(root)
+        except Exception as e:
+            print(f"[supervisor] morning gate error: {e}", file=sys.stderr, flush=True)
         if time.monotonic() >= next_master:
             idle = not has_active_work(root)   # 마스터 기동 직전 판정
             try:

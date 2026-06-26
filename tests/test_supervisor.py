@@ -608,5 +608,58 @@ class MaybeRunLibrarianTest(unittest.TestCase):
         self.assertFalse(ran)
 
 
+class MaybeRunMorningTest(unittest.TestCase):
+    """maybe_run_morning: KST시각+하루1회 게이트로 아침 루틴을 0/1회 트리거(idle 불요)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = self.tmp.name
+        os.makedirs(os.path.join(self.root, "state"))
+        # 2026-06-25 22:00Z = 2026-06-26 07:00 KST → target_hour=7 윈도.
+        self.now = datetime(2026, 6, 25, 22, 0, tzinfo=timezone.utc)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_runs_at_target_hour_once(self):
+        calls = []
+        ran = SV.maybe_run_morning(self.root, now=self.now, target_hour=7,
+                                   run=lambda root: calls.append(1))
+        self.assertTrue(ran)
+        self.assertEqual(calls, [1])
+        # 같은 날 두 번째 호출은 no-op(하루 1회).
+        ran2 = SV.maybe_run_morning(self.root, now=self.now, target_hour=7,
+                                    run=lambda root: calls.append(1))
+        self.assertFalse(ran2)
+        self.assertEqual(calls, [1])
+
+    def test_skips_outside_target_hour(self):
+        calls = []
+        off = datetime(2026, 6, 25, 21, 0, tzinfo=timezone.utc)  # 06:00 KST
+        ran = SV.maybe_run_morning(self.root, now=off, target_hour=7,
+                                   run=lambda root: calls.append(1))
+        self.assertFalse(ran)
+        self.assertEqual(calls, [])
+
+    def test_runs_even_when_active_work(self):
+        # librarian 과 달리 idle 을 요구하지 않는다 — 진행 중 일감이 있어도 아침엔 돈다.
+        TK.create_task(self.root, "t1")  # queued(=active)
+        calls = []
+        ran = SV.maybe_run_morning(self.root, now=self.now, target_hour=7,
+                                   run=lambda root: calls.append(1))
+        self.assertTrue(ran)
+        self.assertEqual(calls, [1])
+
+    def test_run_exception_does_not_propagate_and_marks_day(self):
+        # 루틴이 실패해도 예외를 삼키고, 그날은 다시 안 돈다(mark_run 이 결정 시점에 찍힘).
+        def boom(root):
+            raise RuntimeError("x")
+        ran = SV.maybe_run_morning(self.root, now=self.now, target_hour=7, run=boom)
+        self.assertTrue(ran)
+        again = SV.maybe_run_morning(self.root, now=self.now, target_hour=7,
+                                     run=lambda root: (_ for _ in ()).throw(AssertionError()))
+        self.assertFalse(again)
+
+
 if __name__ == "__main__":
     unittest.main()

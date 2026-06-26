@@ -26,6 +26,10 @@ MASTER_SESSION_MAX_CYCLES=20
 # 사서(librarian) 패스를 도는 KST 시각(새벽). 미설정이면 3(새벽 3시).
 # 그 시각 + idle(처리할 일감 없음)일 때 하루 1회 지식 라이브러리를 자가 큐레이션한다.
 LIBRARIAN_HOUR_KST=3
+
+# 마스터 아침 루틴(완료 worktree GC + 일일 다이제스트)을 도는 KST 시각. 미설정이면 7(아침 7시).
+# 그 시각에 하루 1회 실행한다(idle 무관 — 들고있는/확인필요 작업을 Slack 으로 보고하므로).
+MASTER_MORNING_HOUR_KST=7
 ```
 
 ## 그 외 환경 (셸 환경변수로 주입)
