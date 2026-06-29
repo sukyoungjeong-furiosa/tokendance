@@ -274,6 +274,15 @@ def _commit(root, entries):
     HK._render_library(root, HK.load_ledger(root))
 
 
+def _log_action(root, msg):
+    """사서 행동을 state/librarian.log 에 append(가시성 — 매 패스 뭘 했는지 남긴다). KST."""
+    p = os.path.join(root, "state", "librarian.log")
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    ts = datetime.now(KST).strftime("%Y-%m-%d %H:%M KST")
+    with open(p, "a") as f:
+        f.write(f"{ts}  {msg}\n")
+
+
 def _cmd_list(root, args):
     """ledger 엔트리 요약을 JSON 으로 출력(에이전트가 큐레이션 계획에 사용). 읽기 전용."""
     entries = HK.load_ledger(root).get("entries", {})
@@ -357,25 +366,30 @@ def main(argv=None):
             nk = merge_entries(entries, args.keys, into_title=args.into,
                                body=_read_body(args))
             _commit(root, entries)
+            _log_action(root, f"merge {args.keys} → {nk}")
             print(nk)
         elif args.cmd == "polish":
             nk = polish_entry(entries, args.key, title=args.title,
                               summary=args.summary, tags=args.tags, body=_read_body(args))
             _commit(root, entries)
+            _log_action(root, f"polish {args.key} → {nk}")
             print(nk)
         elif args.cmd == "reclassify":
             nk = reclassify_entry(entries, args.key, scope=args.scope, repo=args.repo)
             _commit(root, entries)
+            _log_action(root, f"reclassify {args.key} → {nk} (scope={args.scope} repo={args.repo})")
             print(nk)
         elif args.cmd == "add-candidate":
             nk = add_candidate(entries, args.title, _read_body(args) or "",
                                scope=args.scope, repo=args.repo, summary=args.summary,
                                tags=args.tags, sources=args.sources)
             _commit(root, entries)
+            _log_action(root, f"add-candidate → {nk}")
             print(nk)
         elif args.cmd == "promote":
             nk = promote_candidate(entries, args.key)
             _commit(root, entries)
+            _log_action(root, f"promote {args.key} → {nk}")
             print(nk)
         elif args.cmd == "render":
             _commit(root, entries)
